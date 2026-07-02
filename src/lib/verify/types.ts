@@ -12,6 +12,8 @@ export type CommandStatus = "pending" | "running" | "success" | "failed" | "time
 
 export interface CommandResult {
   command: string;
+  /** Actual command executed after runner-level normalization (for example frozen install or bunx -> bun x). */
+  effectiveCommand?: string;
   status: CommandStatus;
   exitCode: number | null;
   durationMs: number | null;
@@ -20,6 +22,43 @@ export interface CommandResult {
   startedAt: string | null;
   finishedAt: string | null;
   truncated: boolean;
+  installStrategy?: InstallStrategy;
+}
+
+export interface DeclaredToolchain {
+  node?: string;
+  bun?: string;
+  sources: Record<string, string>;
+}
+
+export interface EffectiveToolchain {
+  declared: DeclaredToolchain;
+  nodeVersion: string;
+  bunVersion: string | null;
+  pathPrefix?: string[];
+  cacheDir?: string;
+  warnings: string[];
+}
+
+export interface InstallStrategy {
+  requestedCommand: string;
+  effectiveCommand: string;
+  packageManager: "bun" | "npm" | "pnpm" | "unknown";
+  mode: "frozen" | "locked" | "unlocked" | "not-install";
+  lockfile: string | null;
+  lockfileHonored: boolean;
+}
+
+export interface ResolutionProbeRequest {
+  packages: string[];
+}
+
+export interface ResolutionProbeResult {
+  packageName: string;
+  ok: boolean;
+  resolved?: string;
+  format?: "esm" | "cjs" | "unknown";
+  error?: string;
 }
 
 export interface JobMetadata {
@@ -50,6 +89,8 @@ export interface VerifyRequest {
    * DYLD_INSERT_LIBRARIES) are rejected. See validateEnv in mcp.ts.
    */
   env?: Record<string, string>;
+  /** Optional diagnostic: package names to resolve from the cloned workspace after install. */
+  resolution_probe?: string[] | ResolutionProbeRequest;
   /** Execution mode: "async" (default, returns 202 immediately) or "sync" (runs inline, returns final result). */
   mode?: "sync" | "async";
 }
@@ -92,6 +133,9 @@ export interface Job {
   webhookDeliveries?: WebhookDelivery[];
   tags?: string[];
   annotations?: JobAnnotation[];
+  toolchain?: EffectiveToolchain;
+  installStrategies?: InstallStrategy[];
+  resolutionProbe?: ResolutionProbeResult[];
 }
 
 export interface HealthResponse {
@@ -124,6 +168,8 @@ export interface HealthResponse {
   bunVersion?: string | null;
   /** Absolute base directory under which per-job workspaces are cloned. */
   workspaceRoot?: string;
+  /** Cache root for per-job Node/Bun toolchains. */
+  toolchainCacheRoot?: string;
 }
 
 // A share token grants public read-only access to a single job's result.

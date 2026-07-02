@@ -47,6 +47,7 @@ export interface VerifyConfig {
   maxConcurrentJobs: number;
   cleanupAfterMs: number;
   dataDir: string;
+  toolchainCacheRoot: string;
 }
 
 function parseAuthMode(raw: string | undefined): AuthMode {
@@ -126,6 +127,7 @@ export function getConfig(): VerifyConfig {
     maxConcurrentJobs: Math.max(1, intEnv("MAX_CONCURRENT_JOBS", 1)),
     cleanupAfterMs: intEnv("CLEANUP_AFTER_MS", 3_600_000),
     dataDir: path.resolve(process.cwd(), dataDir),
+    toolchainCacheRoot: path.resolve(strEnv("TOOLCHAIN_CACHE_DIR", path.join(os.tmpdir(), "purr-verify-toolchains"))),
   };
 }
 

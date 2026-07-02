@@ -31,6 +31,7 @@ interface RuntimeState {
    * logs. Cleared in clearRuntime.
    */
   env?: Record<string, string> | null;
+  resolutionProbePackages?: string[];
 }
 
 const jobs = new Map<string, Job>();
@@ -170,6 +171,7 @@ export async function loadPersisted(): Promise<void> {
             cancelRequested: false,
             githubToken: null,
             env: null,
+            resolutionProbePackages: [],
           });
         }
       } catch {
@@ -201,6 +203,7 @@ export function createJob(input: {
    * ONLY — never written to the persisted Job JSON.
    */
   env?: Record<string, string>;
+  resolutionProbePackages?: string[];
 }): Job {
   const now = new Date().toISOString();
   const job: Job = {
@@ -231,6 +234,8 @@ export function createJob(input: {
     error: null,
     cleanupStatus: "pending",
     tags: input.tags ?? [],
+    installStrategies: [],
+    resolutionProbe: [],
   };
   jobs.set(job.jobId, job);
   // githubToken and env live ONLY in memory — they are deliberately NOT on the
@@ -241,6 +246,7 @@ export function createJob(input: {
     cancelRequested: false,
     githubToken: input.githubToken ?? null,
     env: input.env ?? null,
+    resolutionProbePackages: input.resolutionProbePackages ?? [],
   });
   void persist(job);
   return job;

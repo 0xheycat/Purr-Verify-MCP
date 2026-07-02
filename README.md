@@ -488,6 +488,8 @@ bun run check        # typecheck + lint + build
 **`next build` fails with `TypeError: generate is not a function`, or `bun test` can't find `@solana/web3.js` exports — but CI is green.**
 This was the runner environment bug fixed in [PR #1](https://github.com/0xheycat/Purr-Verify-MCP/pull/1). Confirm your deployment includes it: `health_check` should report a `workspaceRoot` under the OS temp dir (not `.next/...`). If it still points inside `.next`, unset any relative `WORKDIR_BASE` and redeploy.
 
+If workspace isolation is already deployed and the failure is still identical, use the round-2 parity checks in [`docs/RUNNER_TOOLCHAIN_PARITY.md`](docs/RUNNER_TOOLCHAIN_PARITY.md). The runner now reports each job's effective Node/Bun versions, frozen install strategy, and optional package resolution probe output.
+
 **A sync call times out but the job seems fine.**
 Heavy jobs exceed the ~60s MCP transport window. Use `mode: "async"` and poll `get_verification_job`.
 
