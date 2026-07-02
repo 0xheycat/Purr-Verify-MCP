@@ -19,7 +19,7 @@
 - [Recent update — runner environment hardening](#recent-update--runner-environment-hardening)
 - [Configuration](#configuration)
 - [Auth modes](#auth-modes)
-- [Deploy](#deploy)
+- [Deploy (self-hosting)](#deploy-self-hosting)
 - [Security model](#security-model)
 - [Troubleshooting](#troubleshooting)
 - [For agents: `SKILL.md`](#for-agents-skillmd)
@@ -93,6 +93,8 @@ MCP URL:  https://<your-host>/mcp
 Auth:     Bearer token
 Token:    <your GitHub PAT>     # in github_passthrough mode
 ```
+
+> Don't have a host yet? See [Deploy (self-hosting)](#deploy-self-hosting) — there is no shared public URL; you run your own instance.
 
 ### 2. Confirm the runtime is healthy
 
@@ -376,18 +378,86 @@ Client sends `Authorization: Bearer <VERIFY_TOKEN>`.
 
 ---
 
-## Deploy
+## Deploy (self-hosting)
 
-Deploy as a **Web Service** (not Static Site). Render supports Bun + Next.js and this repo ships a `render.yaml` blueprint.
+> **There is no shared public Purr Verify URL.** The GitHub MCP we rely on is already a hosted/public service, but the **verification runner is something you host yourself** — one small instance per person or team. Once it's online with an HTTPS URL, point your MCP client at `https://<your-host>/mcp`.
+
+You need any host that can (1) run Bun, (2) reach `github.com`, and (3) expose an **HTTPS** port. Below are free/cheap options, easiest first, plus how to get a public URL.
+
+### Option A — Render (easiest, zero server admin)
+
+Deploy as a **Web Service** (not Static Site). This repo ships a `render.yaml` blueprint, so you can “New → Blueprint” and point it at your fork.
 
 ```bash
-# Build
+# Build Command
 bun install --frozen-lockfile && bun run build
-# Start
+# Start Command
 bun run start
 ```
 
-Blueprint defaults: `AUTH_MODE=github_passthrough`, `ALLOWED_REPOS=*`, `ALLOW_ALL_REPOS=true`, `MAX_CONCURRENT_JOBS=1`.
+Blueprint defaults: `AUTH_MODE=github_passthrough`, `ALLOWED_REPOS=*`, `ALLOW_ALL_REPOS=true`, `MAX_CONCURRENT_JOBS=1`. Render gives you an automatic `https://<app>.onrender.com` URL → your MCP endpoint is that + `/mcp`.
+
+> Free instances **sleep when idle** (first request cold-starts) and offer ~750 hrs/month. Fine for occasional verification; use Option B for always-on.
+
+### Option B — Oracle Cloud **Always Free** (most generous — a real always-on VM)
+
+Oracle Cloud's **Always Free** tier includes Arm Ampere (A1) VMs (up to 4 vCPU / 24 GB RAM) that **don't expire** — ideal for an always-on runner. Rough steps:
+
+1. Create an **Always Free** Ampere (ARM) Compute instance, Ubuntu 22.04+.
+2. In the VCN **Security List / NSG**, add ingress rules for TCP **443** (and **80** for certificate issuance).
+3. SSH in and install Bun + git:
+   ```bash
+   sudo apt update && sudo apt install -y git unzip
+   curl -fsSL https://bun.sh/install | bash && source ~/.bashrc
+   ```
+4. Clone, configure, and build:
+   ```bash
+   git clone https://github.com/0xheycat/Purr-Verify-MCP.git
+   cd Purr-Verify-MCP
+   cp .env.example .env    # set AUTH_MODE=github_passthrough, ALLOW_ALL_REPOS=true
+   bun install --frozen-lockfile && bun run build
+   ```
+5. Run it under **systemd** so it survives reboots (a unit that runs `bun run start`, listening on port 3000).
+6. Put **Caddy** in front for **automatic HTTPS** (needs a domain’s A record pointed at the VM’s public IP):
+   ```caddy
+   # /etc/caddy/Caddyfile
+   verify.yourdomain.com {
+     reverse_proxy localhost:3000
+   }
+   ```
+   Caddy fetches a Let’s Encrypt cert automatically → your MCP URL becomes `https://verify.yourdomain.com/mcp`.
+
+> Don’t forget Ubuntu’s local firewall too: `sudo ufw allow 80,443/tcp`. No domain? Use Option D (Cloudflare Tunnel) to get HTTPS without one.
+
+### Option C — Fly.io / Railway / Google Cloud Run (container-native)
+
+All three have free or trial tiers and hand you an HTTPS URL out of the box. Bun + the Next.js standalone build runs well in a container: set the same env vars, expose port **3000**, and use the platform domain (`*.fly.dev`, `*.up.railway.app`, `*.run.app`) as your MCP host. Cloud Run in particular scales to zero, so you only pay/consume while a job runs.
+
+### Option D — Any VPS or your own machine + **Cloudflare Tunnel** (no public IP needed)
+
+If your host has **no public IP** (home server, NAT, locked-down cloud), run the app locally and expose it with a free **Cloudflare Tunnel** (or `ngrok`):
+
+```bash
+bun run start                              # app on http://localhost:3000
+cloudflared tunnel --url http://localhost:3000
+```
+
+Cloudflare prints a public HTTPS URL (e.g. `https://something.trycloudflare.com`) → your MCP endpoint is that URL + `/mcp`. This is the fastest way to get a shareable HTTPS URL without opening firewall ports or owning a domain.
+
+### Which should I pick?
+
+| Option | Cost | Always-on | HTTPS | Best for |
+|---|---|---|---|---|
+| **Render** | Free tier | Sleeps when idle | Automatic | Fastest setup, no server admin |
+| **Oracle Cloud Always Free** | Free (no expiry) | Yes | Caddy + domain | A real always-on runner |
+| **Fly.io / Railway / Cloud Run** | Free/trial | Varies (Cloud Run scales to zero) | Automatic | Container-native deploys |
+| **VPS/home + Cloudflare Tunnel** | Free | While the machine is up | Automatic (tunnel) | No public IP / quick sharing |
+
+### After it's up
+
+1. `curl https://<your-host>/api/health` → expect `status: "ok"` and a `workspaceRoot` under the OS temp dir (not `.next/...`).
+2. Point your MCP client at `https://<your-host>/mcp` with `Authorization: Bearer <GitHub PAT>` (in `github_passthrough` mode).
+3. Keep `MAX_CONCURRENT_JOBS=1` on small/free instances.
 
 ### Local development
 
