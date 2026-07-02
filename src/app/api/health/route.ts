@@ -30,6 +30,9 @@ export async function GET() {
     configured: configured.ok,
     backgroundJobsReliable: true,
     syncModeAvailable: true,
+    nodeVersion: process.version,
+    bunVersion: (process.versions as unknown as { bun?: string }).bun ?? null,
+    workspaceRoot: cfg.workdirBase,
   };
   return NextResponse.json(body);
 }

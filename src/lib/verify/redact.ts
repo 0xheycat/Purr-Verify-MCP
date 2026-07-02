@@ -30,11 +30,22 @@ const SECRET_PATTERNS: RegExp[] = [
   /\bauthorization\s*:\s*bearer\s+[A-Za-z0-9._\-]+/gi,
 ];
 
-export function redactText(input: string): string {
+// Redact secrets from a string.
+//
+// `extraSecrets` lets callers scrub transient values that are not known to the
+// static config — e.g. per-job env values injected via create_verification_job,
+// which may contain tokens/paths the caller considers sensitive. Only values
+// with length >= 4 are treated as literal secrets (shorter values would cause
+// excessive false-positive redaction).
+export function redactText(input: string, extraSecrets: string[] = []): string {
   if (!input) return input;
   let out = input;
+  const literals = [
+    ...literalSecrets(),
+    ...extraSecrets.filter((s) => typeof s === "string" && s.length >= 4),
+  ];
   // Literal secret values first (exact substring removal).
-  for (const secret of literalSecrets()) {
+  for (const secret of literals) {
     if (secret && secret.length >= 4) {
       // Escape regex metachars in the secret.
       const esc = secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
