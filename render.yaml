@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: purr-verify-mcp
+    runtime: node
+    plan: free
+    buildCommand: bun install --frozen-lockfile && bun run build
+    startCommand: bun run start
+    autoDeploy: true
+    envVars:
+      - key: AUTH_MODE
+        value: github_passthrough
+      - key: ALLOWED_REPOS
+        value: "*"
+      - key: ALLOW_ALL_REPOS
+        value: "true"
+      - key: VERIFY_TOKEN
+        generateValue: true
+      - key: WORKDIR_BASE
+        value: .verify-workspaces
+      - key: VERIFY_DATA_DIR
+        value: .verify-data
+      - key: MAX_LOG_BYTES
+        value: "500000"
+      - key: COMMAND_TIMEOUT_MS
+        value: "600000"
+      - key: JOB_TIMEOUT_MS
+        value: "1800000"
+      - key: MAX_CONCURRENT_JOBS
+        value: "1"
+      - key: CLEANUP_AFTER_MS
+        value: "3600000"

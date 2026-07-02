@@ -8,12 +8,13 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { ChildProcess } from "node:child_process";
 import { getConfig } from "./config";
 import type { Job, JobStatus } from "./types";
 
 // Internal runtime tracking (not serialized).
 interface RuntimeState {
-  currentChild?: { kill: (signal?: string) => void } | null;
+  currentChild?: ChildProcess | null;
   jobTimer?: NodeJS.Timeout | null;
   cancelRequested?: boolean;
   /**
@@ -325,6 +326,7 @@ export function totalJobCount(): number {
 
 export function clearRuntime(jobId: string): void {
   const rt = runtime.get(jobId);
+  if (!rt) return;
   if (rt?.jobTimer) {
     clearTimeout(rt.jobTimer);
     rt.jobTimer = null;
