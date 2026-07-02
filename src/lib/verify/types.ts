@@ -42,6 +42,14 @@ export interface VerifyRequest {
   metadata?: JobMetadata;
   callback_url?: string;
   tags?: string[];
+  /**
+   * Optional environment variables injected into every command's process
+   * environment. Values may contain secrets: they are redacted from stored
+   * logs/results/share links and are NEVER persisted to disk. Reserved keys
+   * (PATH, NODE_PATH, NODE_OPTIONS, LD_PRELOAD, LD_LIBRARY_PATH,
+   * DYLD_INSERT_LIBRARIES) are rejected. See validateEnv in mcp.ts.
+   */
+  env?: Record<string, string>;
   /** Execution mode: "async" (default, returns 202 immediately) or "sync" (runs inline, returns final result). */
   mode?: "sync" | "async";
 }
@@ -110,6 +118,12 @@ export interface HealthResponse {
   backgroundJobsReliable: boolean;
   /** Whether synchronous mode is available (POST /api/verify?mode=sync). */
   syncModeAvailable: boolean;
+  /** Node.js runtime version (process.version), e.g. "v26.3.0". Optional for backward compat. */
+  nodeVersion?: string;
+  /** Bun runtime version if running under Bun (process.versions.bun), else null. */
+  bunVersion?: string | null;
+  /** Absolute base directory under which per-job workspaces are cloned. */
+  workspaceRoot?: string;
 }
 
 // A share token grants public read-only access to a single job's result.

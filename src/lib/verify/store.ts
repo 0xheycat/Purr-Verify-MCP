@@ -24,6 +24,13 @@ interface RuntimeState {
    * the executor falls back to env GITHUB_TOKEN. Cleared in clearRuntime.
    */
   githubToken?: string | null;
+  /**
+   * Per-job environment variables (first-class env injection). In-memory ONLY —
+   * never persisted (values may contain secrets). The executor injects these
+   * into each command's process env; redactText scrubs them from captured
+   * logs. Cleared in clearRuntime.
+   */
+  env?: Record<string, string> | null;
 }
 
 const jobs = new Map<string, Job>();
@@ -162,6 +169,7 @@ export async function loadPersisted(): Promise<void> {
             jobTimer: null,
             cancelRequested: false,
             githubToken: null,
+            env: null,
           });
         }
       } catch {
@@ -188,6 +196,11 @@ export function createJob(input: {
    * Job JSON. The executor reads it via getRuntime(jobId).githubToken.
    */
   githubToken?: string;
+  /**
+   * Transient per-job environment variables. Stored in the in-memory runtime
+   * ONLY — never written to the persisted Job JSON.
+   */
+  env?: Record<string, string>;
 }): Job {
   const now = new Date().toISOString();
   const job: Job = {
@@ -220,13 +233,14 @@ export function createJob(input: {
     tags: input.tags ?? [],
   };
   jobs.set(job.jobId, job);
-  // githubToken lives ONLY in memory — it is deliberately NOT on the Job
-  // object, so persist(job) below can never write it to disk.
+  // githubToken and env live ONLY in memory — they are deliberately NOT on the
+  // Job object, so persist(job) below can never write them to disk.
   runtime.set(job.jobId, {
     currentChild: null,
     jobTimer: null,
     cancelRequested: false,
     githubToken: input.githubToken ?? null,
+    env: input.env ?? null,
   });
   void persist(job);
   return job;
@@ -335,6 +349,8 @@ export function clearRuntime(jobId: string): void {
   // Drop the transient GitHub token so it isn't held in memory after the job
   // finishes. (The token was only needed for cloning, which is done by now.)
   if (rt) rt.githubToken = null;
+  // Drop per-job env (may contain secrets) once the job is finished.
+  if (rt) rt.env = null;
 }
 
 // Periodically trim very old finished jobs from memory.

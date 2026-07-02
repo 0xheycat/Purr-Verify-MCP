@@ -48,6 +48,12 @@ function buildCloneUrl(repo: string, runtimeToken?: string): string {
 }
 
 // Run a single program (no shell) with stdout/stderr capture + redaction.
+//
+// `opts.cleanNodeEnv` (used for the repo's OWN commands: bun install / bun test
+// / next build / prisma generate) strips NODE_PATH / NODE_OPTIONS from the
+// child's environment so module resolution is driven purely by the isolated
+// per-job workspace's node_modules and never inherits the server bundle's
+// resolution hints — a root cause of the runner's false-negative failures.
 function runSpawn(
   program: string,
   args: string[],
@@ -55,12 +61,18 @@ function runSpawn(
   cwd: string,
   timeoutMs: number,
   maxBytes: number,
-  onChild: (child: ChildProcess) => void
+  onChild: (child: ChildProcess) => void,
+  opts?: { cleanNodeEnv?: boolean }
 ): Promise<{ code: number | null; stdout: string; stderr: string; truncated: boolean; timedOut: boolean }> {
   return new Promise((resolve) => {
+    const baseEnv: NodeJS.ProcessEnv = { ...process.env };
+    if (opts?.cleanNodeEnv) {
+      delete baseEnv.NODE_PATH;
+      delete baseEnv.NODE_OPTIONS;
+    }
     const child = spawn(program, args, {
       cwd,
-      env: { ...process.env, ...env },
+      env: { ...baseEnv, ...env },
       stdio: ["ignore", "pipe", "pipe"],
       shell: false,
     });
@@ -192,6 +204,13 @@ async function runJob(jobId: string): Promise<void> {
   const rt = getRuntime(jobId);
   if (!rt) return;
 
+  // Per-job environment variables (first-class env injection). In-memory only;
+  // values are scrubbed from captured logs via envSecrets below.
+  const jobEnv: Record<string, string> = rt.env ?? {};
+  const envSecrets = Object.values(jobEnv).filter(
+    (v) => typeof v === "string" && v.length >= 4
+  );
+
   const startedAt = nowIso();
   const startMs = Date.now();
   updateJob(jobId, { status: "running", startedAt });
@@ -314,17 +333,21 @@ async function runJob(jobId: string): Promise<void> {
           result = { code: 1, stdout: "", stderr: `Failed to read ${parsed.readFile}: ${(e as Error).message}`, truncated: false, timedOut: false };
         }
       } else {
+        // Merge job-level env with any inline ENV=VALUE prefix parsed from the
+        // command (inline values win). cleanNodeEnv ensures module resolution
+        // uses only the isolated workspace's node_modules.
         result = await runSpawn(
           parsed.program,
           parsed.args,
-          parsed.env,
+          { ...jobEnv, ...parsed.env },
           workdir,
           cfg.commandTimeoutMs,
           cfg.maxLogBytes,
           (child) => {
             const rt3 = getRuntime(jobId);
             if (rt3) rt3.currentChild = child;
-          }
+          },
+          { cleanNodeEnv: true }
         );
         const rt3 = getRuntime(jobId);
         if (rt3) rt3.currentChild = null;
@@ -338,8 +361,8 @@ async function runJob(jobId: string): Promise<void> {
         ? "success"
         : "failed";
 
-      const stdoutRed = redactText(result.stdout);
-      const stderrRed = redactText(result.stderr);
+      const stdoutRed = redactText(result.stdout, envSecrets);
+      const stderrRed = redactText(result.stderr, envSecrets);
 
       updateCommand(jobId, i, {
         status,
@@ -685,6 +708,12 @@ export interface CreateJobInput {
    * captured stderr.
    */
   githubToken?: string;
+  /**
+   * Optional per-job environment variables injected into every command's
+   * process environment. In-memory only (never persisted); values are redacted
+   * from captured logs. Validated in mcp.validateEnv.
+   */
+  env?: Record<string, string>;
 }
 
 export async function enqueueJob(input: CreateJobInput): Promise<Job> {

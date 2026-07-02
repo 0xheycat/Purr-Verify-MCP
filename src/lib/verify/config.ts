@@ -1,6 +1,7 @@
 // Centralized configuration sourced from environment variables.
 // All values are read lazily so changes to process.env (e.g. after a restart) are respected.
 
+import os from "node:os";
 import path from "node:path";
 
 export const VERSION = "1.0.0";
@@ -57,6 +58,42 @@ function parseAuthMode(raw: string | undefined): AuthMode {
   return "server_token";
 }
 
+// Returns true if the given path lives inside a Next.js build output directory
+// (".next"). Cloned job workspaces must NEVER be staged there: nesting a clone
+// under the server's own bundle poisons module resolution (bun/node walk up to
+// the bundle's node_modules and can resolve packages like @solana/web3.js to
+// the wrong CJS entry) and skips required build prep. This was the root cause
+// of the runner's false-negative build/test failures.
+function isInsideNextBuild(p: string): boolean {
+  return /(^|[/\\])\.next([/\\]|$)/.test(p);
+}
+
+// Resolve the base directory under which per-job workspaces are cloned.
+//
+// Priority:
+//   1. WORKDIR_BASE env (absolute used as-is; relative resolved from cwd).
+//   2. Default: <os.tmpdir()>/purr-verify-workspaces — an isolated root that
+//      is OUTSIDE the app bundle so each clone gets a clean per-job
+//      node_modules and correct module resolution.
+//
+// Guard: if the resolved path would land inside a ".next" build output (e.g.
+// because cwd is .next/standalone in production `bun .next/standalone/server.js`
+// combined with a relative WORKDIR_BASE), fall back to the isolated temp root.
+export function resolveWorkdirBase(): string {
+  const raw = process.env.WORKDIR_BASE;
+  let resolved: string;
+  if (raw && raw.trim()) {
+    const v = raw.trim();
+    resolved = path.isAbsolute(v) ? v : path.resolve(process.cwd(), v);
+  } else {
+    resolved = path.join(os.tmpdir(), "purr-verify-workspaces");
+  }
+  if (isInsideNextBuild(resolved)) {
+    resolved = path.join(os.tmpdir(), "purr-verify-workspaces");
+  }
+  return resolved;
+}
+
 export function getConfig(): VerifyConfig {
   const verifyToken = strEnv("VERIFY_TOKEN", "");
   const githubToken = strEnv("GITHUB_TOKEN", "");
@@ -75,7 +112,6 @@ export function getConfig(): VerifyConfig {
         .split(",")
         .map((s) => s.trim())
         .filter((s) => s && s !== "*");
-  const workdirBase = strEnv("WORKDIR_BASE", ".verify-workspaces");
   const dataDir = strEnv("VERIFY_DATA_DIR", ".verify-data");
   return {
     verifyToken,
@@ -83,7 +119,7 @@ export function getConfig(): VerifyConfig {
     authMode,
     allowedRepos,
     allowAllRepos,
-    workdirBase: path.resolve(process.cwd(), workdirBase),
+    workdirBase: resolveWorkdirBase(),
     maxLogBytes: intEnv("MAX_LOG_BYTES", 500_000),
     commandTimeoutMs: intEnv("COMMAND_TIMEOUT_MS", 600_000),
     jobTimeoutMs: intEnv("JOB_TIMEOUT_MS", 1_800_000),

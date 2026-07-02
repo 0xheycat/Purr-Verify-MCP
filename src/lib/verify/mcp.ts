@@ -6,12 +6,13 @@
 //   - get_verification_job
 //   - list_verification_jobs
 //   - cancel_verification_job
+//   - list_allowed_commands
 //   - health_check
 
 import { NextRequest, NextResponse } from "next/server";
 import { VERSION, getConfig, isConfigured, isRepoAllowed, isValidHead, isValidRef, githubTokenSource } from "./config";
 import { checkAuth, unauthorized } from "./auth";
-import { validateCommands } from "./allowlist";
+import { validateCommands, listPatterns } from "./allowlist";
 import { enqueueJob, requestCancel, runJobSync } from "./executor";
 import { getJob, listJobs, loadPersisted } from "./store";
 import { activeJobCount, queuedJobCount, totalJobCount } from "./store";
@@ -69,6 +70,11 @@ const TOOLS: ToolDef[] = [
           default: "async",
           description: "Execution mode: 'async' (default) queues the job and returns immediately with a jobId; 'sync' runs the job inline and returns the full final result. Sync mode blocks until the job completes (subject to JOB_TIMEOUT_MS).",
         },
+        env: {
+          type: "object",
+          additionalProperties: { type: "string" },
+          description: "Optional environment variables (string values) injected into every command's process environment. Values may contain secrets — they are redacted from stored logs, results, and share links, and are never persisted to disk. Reserved keys (PATH, NODE_PATH, NODE_OPTIONS, LD_PRELOAD, LD_LIBRARY_PATH, DYLD_INSERT_LIBRARIES) are rejected. Max 50 vars.",
+        },
       },
       required: ["repo", "ref", "commands"],
     },
@@ -106,6 +112,13 @@ const TOOLS: ToolDef[] = [
   {
     name: "health_check",
     description: "Return service health and active job counts.",
+    inputSchema: { type: "object", properties: {} },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: "list_allowed_commands",
+    description:
+      "List the allowlisted command patterns this runner will execute. Any command that does not match one of these exact grammars is rejected before a job runs. Use this to discover what can be passed in `commands`.",
     inputSchema: { type: "object", properties: {} },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
@@ -234,8 +247,17 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
               configured: configured.ok,
               backgroundJobsReliable: true,
               syncModeAvailable: true,
+              nodeVersion: process.version,
+              bunVersion: (process.versions as unknown as { bun?: string }).bun ?? null,
+              workspaceRoot: cfg.workdirBase,
             };
             return rpcResult(rid, { content: [toText(health)], isError: false });
+          }
+          case "list_allowed_commands": {
+            return rpcResult(rid, {
+              content: [toText({ patterns: listPatterns() })],
+              isError: false,
+            });
           }
           case "list_verification_jobs": {
             await loadPersisted();
@@ -279,6 +301,8 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
               tags: validation.tags,
               // Per-request GitHub clone token (github_passthrough mode).
               githubToken: auth.githubToken,
+              // Optional per-job env injection (validated + redacted from logs).
+              env: validation.env,
             };
 
             // Determine execution mode. Default is "async".
@@ -422,6 +446,7 @@ export function validateCreateInput(input: VerifyRequest): {
   reason?: string;
   commands?: string[];
   tags?: string[];
+  env?: Record<string, string>;
 } {
   if (!input || typeof input !== "object") return { ok: false, reason: "invalid body" };
   if (!input.repo || typeof input.repo !== "string")
@@ -437,7 +462,52 @@ export function validateCreateInput(input: VerifyRequest): {
   if (!cv.ok) return { ok: false, reason: cv.reason };
   const tv = validateTags(input.tags);
   if (!tv.ok) return { ok: false, reason: tv.reason };
-  return { ok: true, commands: cv.commands, tags: tv.tags };
+  const ev = validateEnv(input.env);
+  if (!ev.ok) return { ok: false, reason: ev.reason };
+  return { ok: true, commands: cv.commands, tags: tv.tags, env: ev.env };
+}
+
+// Validate the optional `env` field: a Record<string,string> of environment
+// variables injected into each command's process environment. Keys must be
+// POSIX-shell-safe env names; a small set of resolution/loader-sensitive keys
+// is rejected so a job can never repoint module/library resolution. Empty or
+// undefined → {}.
+export function validateEnv(env: unknown): {
+  ok: boolean;
+  reason?: string;
+  env: Record<string, string>;
+} {
+  if (env == null) return { ok: true, env: {} };
+  if (typeof env !== "object" || Array.isArray(env)) {
+    return { ok: false, reason: "env must be an object of string values", env: {} };
+  }
+  const entries = Object.entries(env as Record<string, unknown>);
+  if (entries.length > 50) return { ok: false, reason: "too many env vars (max 50)", env: {} };
+  const RESERVED = new Set([
+    "PATH",
+    "NODE_PATH",
+    "NODE_OPTIONS",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES",
+  ]);
+  const out: Record<string, string> = {};
+  for (const [key, value] of entries) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      return { ok: false, reason: `invalid env key: ${key}`, env: {} };
+    }
+    if (RESERVED.has(key.toUpperCase())) {
+      return { ok: false, reason: `env key not allowed: ${key}`, env: {} };
+    }
+    if (typeof value !== "string") {
+      return { ok: false, reason: `env value for ${key} must be a string`, env: {} };
+    }
+    if (value.length > 4096) {
+      return { ok: false, reason: `env value for ${key} is too long (max 4096 chars)`, env: {} };
+    }
+    out[key] = value;
+  }
+  return { ok: true, env: out };
 }
 
 // Validate the optional `tags` field: array of strings, max 10, each 1-30
