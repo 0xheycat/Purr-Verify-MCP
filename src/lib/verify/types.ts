@@ -1,0 +1,153 @@
+// Shared types for the Purr Verify MCP service.
+
+export type JobStatus =
+  | "queued"
+  | "running"
+  | "success"
+  | "failed"
+  | "canceled"
+  | "timeout";
+
+export type CommandStatus = "pending" | "running" | "success" | "failed" | "timeout" | "skipped";
+
+export interface CommandResult {
+  command: string;
+  status: CommandStatus;
+  exitCode: number | null;
+  durationMs: number | null;
+  stdout: string;
+  stderr: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  truncated: boolean;
+}
+
+export interface JobMetadata {
+  pr?: number | string;
+  purpose?: string;
+  [key: string]: unknown;
+}
+
+export interface JobSummary {
+  passed: boolean;
+  failedCommand: string | null;
+}
+
+export interface VerifyRequest {
+  repo: string;
+  ref: string;
+  expected_head?: string;
+  commands: string[];
+  continue_on_error?: boolean;
+  metadata?: JobMetadata;
+  callback_url?: string;
+  tags?: string[];
+  /** Execution mode: "async" (default, returns 202 immediately) or "sync" (runs inline, returns final result). */
+  mode?: "sync" | "async";
+}
+
+export interface WebhookDelivery {
+  attempt: number;
+  url: string;
+  status: "success" | "failed" | "timeout";
+  statusCode: number | null;
+  sentAt: string;
+  durationMs: number;
+  error?: string | null;
+}
+
+export interface JobAnnotation {
+  id: string;
+  text: string;
+  createdAt: string;
+  author?: string;
+}
+
+export interface Job {
+  jobId: string;
+  repo: string;
+  ref: string;
+  expected_head?: string;
+  actual_head?: string;
+  status: JobStatus;
+  startedAt: string | null;
+  finishedAt: string | null;
+  durationMs: number | null;
+  queuedAt: string;
+  commands: CommandResult[];
+  summary: JobSummary;
+  continue_on_error: boolean;
+  metadata: JobMetadata;
+  callback_url?: string;
+  error?: string | null;
+  cleanupStatus?: "pending" | "done" | "failed" | "skipped";
+  webhookDeliveries?: WebhookDelivery[];
+  tags?: string[];
+  annotations?: JobAnnotation[];
+}
+
+export interface HealthResponse {
+  status: "ok";
+  service: "purr-verify-mcp";
+  time: string;
+  activeJobs: number;
+  queuedJobs: number;
+  totalJobs: number;
+  version: string;
+  allowedRepos: string[];
+  /**
+   * True when the repo allowlist is unrestricted (ALLOWED_REPOS empty/"*" or
+   * ALLOW_ALL_REPOS=true). In that case any `owner/repo` matching the safe
+   * regex is accepted and `allowedRepos` is `[]`.
+   */
+  allowAllRepos: boolean;
+  /** Active auth mode: server_token (Bearer == VERIFY_TOKEN) or github_passthrough (Bearer == GitHub PAT, validated via GitHub API). */
+  authMode: "server_token" | "github_passthrough";
+  /** Where the GitHub clone token comes from: "bearer" (passthrough), "env" (GITHUB_TOKEN), or "none". Never exposes the token value. */
+  githubTokenSource: "bearer" | "env" | "none";
+  configured: boolean;
+  /** Whether async background jobs run reliably (executor + scheduler healthy). */
+  backgroundJobsReliable: boolean;
+  /** Whether synchronous mode is available (POST /api/verify?mode=sync). */
+  syncModeAvailable: boolean;
+}
+
+// A share token grants public read-only access to a single job's result.
+// Tokens are short-lived (default 24h, max 7d) and can be revoked at any time.
+export interface ShareToken {
+  token: string;
+  jobId: string;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt?: string | null;
+  createdBy?: string | null;
+  // Optional note set by the creator (e.g., "PR review", "Slack share").
+  note?: string | null;
+}
+
+// Public job view returned by GET /api/share/:token. Sensitive fields are
+// stripped: callback_url, webhook_deliveries, metadata internals. The
+// command stdout/stderr is kept because that's the value of sharing.
+export interface PublicJobView {
+  jobId: string;
+  repo: string;
+  ref: string;
+  status: JobStatus;
+  startedAt: string | null;
+  finishedAt: string | null;
+  durationMs: number | null;
+  queuedAt: string;
+  commands: CommandResult[];
+  summary: JobSummary;
+  continue_on_error: boolean;
+  error?: string | null;
+  cleanupStatus?: string;
+  tags?: string[];
+  actual_head?: string;
+  // Share metadata so the viewer knows when the link expires.
+  sharedVia: {
+    token: string;
+    createdAt: string;
+    expiresAt: string;
+  };
+}

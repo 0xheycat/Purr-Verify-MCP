@@ -1,0 +1,778 @@
+// Verification job executor.
+//
+// Runs jobs asynchronously in the background (same Node process as the API).
+// Each job:
+//   1. Creates a fresh temp workspace.
+//   2. Clones the repo/branch (shallow).
+//   3. Verifies expected_head if provided.
+//   4. Runs allowlisted commands sequentially (no shell).
+//   5. Captures + redacts logs, enforces per-command and per-job timeouts.
+//   6. Cleans up the workspace unconditionally.
+//
+// Concurrency is capped by MAX_CONCURRENT_JOBS via a small scheduler.
+
+import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { getConfig, isRepoAllowed, isValidHead, isValidRef } from "./config";
+import { parseCommand } from "./parse";
+import { redactText } from "./redact";
+import {
+  clearRuntime,
+  createJob,
+  getJob,
+  getRuntime,
+  loadPersisted,
+  setJobStatus,
+  trimOldJobs,
+  updateJob,
+} from "./store";
+import type { CommandResult, Job, JobStatus, WebhookDelivery } from "./types";
+
+let schedulerRunning = false;
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function buildCloneUrl(repo: string, runtimeToken?: string): string {
+  // Prefer the per-request token (github_passthrough mode: the bearer GitHub
+  // PAT). Fall back to the server's env GITHUB_TOKEN (server_token mode).
+  const token = runtimeToken || getConfig().githubToken;
+  if (token) {
+    return `https://x-access-token:${token}@github.com/${repo}.git`;
+  }
+  return `https://github.com/${repo}.git`;
+}
+
+// Run a single program (no shell) with stdout/stderr capture + redaction.
+function runSpawn(
+  program: string,
+  args: string[],
+  env: Record<string, string>,
+  cwd: string,
+  timeoutMs: number,
+  maxBytes: number,
+  onChild: (child: ChildProcess) => void
+): Promise<{ code: number | null; stdout: string; stderr: string; truncated: boolean; timedOut: boolean }> {
+  return new Promise((resolve) => {
+    const child = spawn(program, args, {
+      cwd,
+      env: { ...process.env, ...env },
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: false,
+    });
+    onChild(child);
+
+    let stdoutLen = 0;
+    let stderrLen = 0;
+    let stdout = "";
+    let stderr = "";
+    let truncated = false;
+    let timedOut = false;
+    let done = false;
+
+    const finish = (code: number | null) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ code, stdout, stderr, truncated, timedOut });
+    };
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // ignore
+      }
+    }, timeoutMs);
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (stdoutLen >= maxBytes) {
+        truncated = true;
+        return;
+      }
+      const s = chunk.toString("utf8");
+      const remaining = maxBytes - stdoutLen;
+      if (s.length > remaining) {
+        stdout += s.slice(0, remaining);
+        stdoutLen = maxBytes;
+        truncated = true;
+      } else {
+        stdout += s;
+        stdoutLen += s.length;
+      }
+    });
+
+    child.stderr?.on("data", (chunk: Buffer) => {
+      if (stderrLen >= maxBytes) {
+        truncated = true;
+        return;
+      }
+      const s = chunk.toString("utf8");
+      const remaining = maxBytes - stderrLen;
+      if (s.length > remaining) {
+        stderr += s.slice(0, remaining);
+        stderrLen = maxBytes;
+        truncated = true;
+      } else {
+        stderr += s;
+        stderrLen += s.length;
+      }
+    });
+
+    child.on("error", (err) => {
+      stderr += `\n[executor] failed to spawn: ${err.message}`;
+      finish(127);
+    });
+
+    child.on("close", (code) => {
+      finish(code);
+    });
+  });
+}
+
+interface CloneResult {
+  ok: boolean;
+  error?: string;
+  head?: string;
+}
+
+async function cloneRepo(
+  repo: string,
+  ref: string,
+  workdir: string,
+  runtimeToken?: string
+): Promise<CloneResult> {
+  const url = buildCloneUrl(repo, runtimeToken);
+  const args = ["clone", "--depth=1", "--branch", ref, url, workdir];
+  const res = await runSpawn("git", args, {}, process.cwd(), 120_000, 200_000, () => {});
+  if (res.code !== 0) {
+    // Fallback: clone default then checkout ref (handles raw SHAs / some tags).
+    const res2 = await runSpawn(
+      "git",
+      ["clone", "--depth=1", url, workdir],
+      {},
+      process.cwd(),
+      120_000,
+      200_000,
+      () => {}
+    );
+    if (res2.code !== 0) {
+      return { ok: false, error: redactText(`git clone failed: ${res2.stderr || res2.stdout || "unknown error"}`) };
+    }
+    const co = await runSpawn("git", ["checkout", ref], {}, workdir, 60_000, 100_000, () => {});
+    if (co.code !== 0) {
+      return { ok: false, error: redactText(`git checkout ${ref} failed: ${co.stderr || co.stdout}`) };
+    }
+  }
+  // Resolve HEAD.
+  const rev = await runSpawn("git", ["rev-parse", "HEAD"], {}, workdir, 30_000, 10_000, () => {});
+  const short = await runSpawn("git", ["rev-parse", "--short", "HEAD"], {}, workdir, 30_000, 10_000, () => {});
+  const full = (rev.stdout || "").trim();
+  const shortSha = (short.stdout || "").trim();
+  return { ok: true, head: full || shortSha || undefined };
+}
+
+async function removeDir(dir: string): Promise<void> {
+  try {
+    await fs.rm(dir, { recursive: true, force: true });
+  } catch {
+    // best effort
+  }
+}
+
+async function runJob(jobId: string): Promise<void> {
+  const job = getJob(jobId);
+  if (!job) return;
+  const cfg = getConfig();
+  const rt = getRuntime(jobId);
+  if (!rt) return;
+
+  const startedAt = nowIso();
+  const startMs = Date.now();
+  updateJob(jobId, { status: "running", startedAt });
+
+  // Job-level timeout.
+  rt.jobTimer = setTimeout(() => {
+    const cur = getRuntime(jobId);
+    if (cur?.currentChild) {
+      try {
+        cur.currentChild.kill("SIGKILL");
+      } catch {
+        // ignore
+      }
+    }
+    const j = getJob(jobId);
+    if (j && (j.status === "running")) {
+      finalize(jobId, "timeout", "Job exceeded JOB_TIMEOUT_MS");
+    }
+  }, cfg.jobTimeoutMs);
+
+  const workdir = path.join(cfg.workdirBase, `${jobId}-${randomUUID().slice(0, 8)}`);
+
+  try {
+    // Validate inputs again (defense in depth).
+    if (!isRepoAllowed(job.repo)) {
+      finalize(jobId, "failed", `Repo not allowed: ${job.repo}`);
+      return;
+    }
+    if (!isValidRef(job.ref)) {
+      finalize(jobId, "failed", `Invalid ref: ${job.ref}`);
+      return;
+    }
+    if (job.expected_head && !isValidHead(job.expected_head)) {
+      finalize(jobId, "failed", `Invalid expected_head: ${job.expected_head}`);
+      return;
+    }
+
+    await fs.mkdir(cfg.workdirBase, { recursive: true });
+
+    // Clone. Pass the per-request GitHub token (github_passthrough mode) so
+    // private repos can be cloned with the caller's PAT. Falls back to env
+    // GITHUB_TOKEN inside buildCloneUrl when undefined.
+    const clone = await cloneRepo(job.repo, job.ref, workdir, rt.githubToken ?? undefined);
+    if (!clone.ok) {
+      finalize(jobId, "failed", clone.error || "git clone failed");
+      return;
+    }
+    const actualHead = clone.head || "";
+    updateJob(jobId, { actual_head: actualHead });
+
+    // Verify expected head.
+    if (job.expected_head) {
+      const eh = job.expected_head.toLowerCase();
+      const ah = actualHead.toLowerCase();
+      const matchesShort = ah.startsWith(eh) || eh.startsWith(ah.slice(0, Math.min(eh.length, ah.length)));
+      const matchesFull = ah === eh || ah.startsWith(eh);
+      if (!(matchesShort || matchesFull)) {
+        finalize(
+          jobId,
+          "failed",
+          `HEAD mismatch: expected ${job.expected_head} but got ${actualHead.slice(0, 12)}`
+        );
+        return;
+      }
+    }
+
+    // Check cancel before running commands.
+    if (rt.cancelRequested) {
+      finalize(jobId, "canceled", "canceled before commands");
+      return;
+    }
+
+    // Run commands sequentially.
+    let failed = false;
+    let failedCommand: string | null = null;
+
+    for (let i = 0; i < job.commands.length; i++) {
+      const cmd = job.commands[i];
+      const commandStr = cmd.command;
+      const rt2 = getRuntime(jobId);
+      if (rt2?.cancelRequested) {
+        // mark remaining as skipped
+        for (let k = i; k < job.commands.length; k++) {
+          updateCommand(jobId, k, { status: "skipped" });
+        }
+        finalize(jobId, "canceled", "canceled during run");
+        return;
+      }
+
+      const cmdStart = nowIso();
+      const cmdStartMs = Date.now();
+      updateCommand(jobId, i, { status: "running", startedAt: cmdStart });
+
+      const parsed = parseCommand(commandStr);
+      let result: {
+        code: number | null;
+        stdout: string;
+        stderr: string;
+        truncated: boolean;
+        timedOut: boolean;
+      };
+
+      if (parsed.readFile) {
+        // `cat reports/<file>` -> read directly.
+        const filePath = path.join(workdir, parsed.readFile);
+        try {
+          if (!existsSync(filePath)) {
+            result = { code: 1, stdout: "", stderr: `File not found: ${parsed.readFile}`, truncated: false, timedOut: false };
+          } else {
+            const stat = await fs.stat(filePath);
+            let content = await fs.readFile(filePath, "utf8");
+            let truncated = false;
+            if (Buffer.byteLength(content, "utf8") > cfg.maxLogBytes) {
+              content = Buffer.from(content, "utf8").slice(0, cfg.maxLogBytes).toString("utf8");
+              truncated = true;
+            }
+            result = { code: 0, stdout: content, stderr: `(${stat.size} bytes)`, truncated, timedOut: false };
+          }
+        } catch (e) {
+          result = { code: 1, stdout: "", stderr: `Failed to read ${parsed.readFile}: ${(e as Error).message}`, truncated: false, timedOut: false };
+        }
+      } else {
+        result = await runSpawn(
+          parsed.program,
+          parsed.args,
+          parsed.env,
+          workdir,
+          cfg.commandTimeoutMs,
+          cfg.maxLogBytes,
+          (child) => {
+            const rt3 = getRuntime(jobId);
+            if (rt3) rt3.currentChild = child;
+          }
+        );
+        const rt3 = getRuntime(jobId);
+        if (rt3) rt3.currentChild = null;
+      }
+
+      const cmdEndMs = Date.now();
+      const durationMs = cmdEndMs - cmdStartMs;
+      const status = result.timedOut
+        ? "timeout"
+        : result.code === 0
+        ? "success"
+        : "failed";
+
+      const stdoutRed = redactText(result.stdout);
+      const stderrRed = redactText(result.stderr);
+
+      updateCommand(jobId, i, {
+        status,
+        exitCode: result.code,
+        durationMs,
+        stdout: stdoutRed,
+        stderr: stderrRed,
+        truncated: result.truncated,
+        finishedAt: nowIso(),
+      });
+
+      if (status !== "success") {
+        failed = true;
+        failedCommand = commandStr;
+        if (!job.continue_on_error) {
+          // mark remaining as skipped
+          for (let k = i + 1; k < job.commands.length; k++) {
+            updateCommand(jobId, k, { status: "skipped" });
+          }
+          break;
+        }
+      }
+    }
+
+    if (rt.cancelRequested) {
+      finalize(jobId, "canceled", "canceled");
+      return;
+    }
+
+    const finalStatus: JobStatus = failed ? "failed" : "success";
+    finalize(jobId, finalStatus, failed ? `Command failed: ${failedCommand}` : null, failedCommand);
+  } catch (e) {
+    finalize(jobId, "failed", `Executor error: ${(e as Error).message}`);
+  } finally {
+    // Always cleanup workspace.
+    clearRuntime(jobId);
+    await removeDir(workdir);
+    const j = getJob(jobId);
+    if (j) updateJob(jobId, { cleanupStatus: "done" });
+  }
+}
+
+function updateCommand(jobId: string, index: number, patch: Partial<CommandResult>): void {
+  const job = getJob(jobId);
+  if (!job) return;
+  const cmd = job.commands[index];
+  if (!cmd) return;
+  Object.assign(cmd, patch);
+  // Light-touch persist handled by periodic flush; to be safe, persist here too.
+  void updateJob(jobId, {});
+}
+
+function finalize(
+  jobId: string,
+  status: JobStatus,
+  error: string | null,
+  failedCommand: string | null = null
+): void {
+  const job = getJob(jobId);
+  if (!job) return;
+  const finishedAt = nowIso();
+  const startMs = job.startedAt ? new Date(job.startedAt).getTime() : Date.now();
+  const durationMs = Date.now() - startMs;
+  const passed = status === "success";
+  const summary = {
+    passed,
+    failedCommand: failedCommand ?? (passed ? null : (job.commands.find((c) => c.status === "failed" || c.status === "timeout")?.command ?? null)),
+  };
+  // If the job reached a terminal state without running all commands (e.g.,
+  // clone failure, HEAD mismatch, cancel before commands, invalid repo/ref),
+  // mark any still-pending commands as skipped so the UI doesn't show them
+  // as "waiting to run" forever. Running commands are left alone because
+  // their close handler may still update them.
+  let commandsChanged = false;
+  for (const c of job.commands) {
+    if (c.status === "pending") {
+      c.status = "skipped";
+      commandsChanged = true;
+    }
+  }
+  updateJob(jobId, {
+    status,
+    finishedAt,
+    durationMs,
+    error,
+    summary,
+    ...(commandsChanged ? { commands: [...job.commands] } : {}),
+  });
+  // Fire webhook callback if configured.
+  if (job.callback_url) {
+    void fireCallback(job.callback_url, jobId);
+  }
+}
+
+// Redact a callback URL for safe storage in delivery history.
+// Strips the query string (which often contains tokens) and masks any
+// embedded userinfo (user:password@ or token@). If URL parsing fails,
+// returns the original value as-is.
+function redactCallbackUrl(raw: string): string {
+  try {
+    const parsed = new URL(raw);
+    parsed.search = "";
+    parsed.hash = "";
+    if (parsed.username || parsed.password) {
+      parsed.username = "***";
+      parsed.password = "";
+    }
+    return parsed.toString();
+  } catch {
+    return raw;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// Attempt a single webhook POST. Records the outcome as a WebhookDelivery
+// entry on the job (via updateJob). Returns true on success (2xx response),
+// false otherwise.
+async function attemptDelivery(
+  jobId: string,
+  url: string,
+  redactedUrl: string,
+  attempt: number,
+  payload: Record<string, unknown>
+): Promise<boolean> {
+  const sentAt = nowIso();
+  const startMs = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  let status: WebhookDelivery["status"] = "failed";
+  let statusCode: number | null = null;
+  let errorMsg: string | null = null;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    statusCode = res.status;
+    if (res.ok) {
+      status = "success";
+    } else {
+      status = "failed";
+      errorMsg = `HTTP ${res.status} ${res.statusText}`.trim();
+    }
+  } catch (e) {
+    const err = e as Error;
+    if (err.name === "AbortError") {
+      status = "timeout";
+      errorMsg = "request timed out (>5s)";
+    } else {
+      status = "failed";
+      errorMsg = err.message || "network error";
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+  const durationMs = Date.now() - startMs;
+  const delivery: WebhookDelivery = {
+    attempt,
+    url: redactedUrl,
+    status,
+    statusCode,
+    sentAt,
+    durationMs,
+    error: errorMsg,
+  };
+  // Append to job.webhookDeliveries (best-effort; never throw).
+  try {
+    const job = getJob(jobId);
+    if (job) {
+      const existing = job.webhookDeliveries ?? [];
+      updateJob(jobId, { webhookDeliveries: [...existing, delivery] });
+    }
+  } catch {
+    // ignore persistence failures
+  }
+  return status === "success";
+}
+
+async function fireCallback(url: string, jobId: string): Promise<void> {
+  try {
+    const job = getJob(jobId);
+    if (!job) return;
+    // Validate URL is https or http (no file:// etc).
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return;
+    }
+    if (!["https:", "http:"].includes(parsed.protocol)) return;
+
+    // Send a lightweight POST with the job result (redacted).
+    const payload = {
+      event: "job_completed",
+      jobId: job.jobId,
+      repo: job.repo,
+      ref: job.ref,
+      status: job.status,
+      durationMs: job.durationMs,
+      summary: job.summary,
+      error: job.error,
+      finishedAt: job.finishedAt,
+      statusUrl: `/api/verify/${job.jobId}`,
+    };
+
+    const redactedUrl = redactCallbackUrl(url);
+
+    // First attempt; if it fails (network error OR non-2xx), retry up to 2
+    // more times with exponential backoff (1s, 3s). Best-effort; never throw.
+    const maxAttempts = 3;
+    const backoffMs = [0, 1000, 3000];
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // Wait before retry (no wait on first attempt).
+      if (attempt > 1) {
+        await sleep(backoffMs[attempt - 1] ?? 3000);
+      }
+      // Re-check job still exists.
+      if (!getJob(jobId)) return;
+      const ok = await attemptDelivery(jobId, url, redactedUrl, attempt, payload);
+      if (ok) return;
+    }
+  } catch {
+    // Best-effort; never block or fail the job.
+  }
+}
+
+// Manually re-fire the webhook for a job. Used by the "Retry webhook" button
+// in the UI. Returns the result of the single attempt (does NOT auto-retry
+// — the user can click retry again if it fails). The delivery is logged in
+// the job's webhookDeliveries history with an `attempt` counter that
+// continues from the previous max (so the manual attempt is distinguishable
+// from the automatic ones).
+export async function retryCallback(jobId: string): Promise<{
+  ok: boolean;
+  status: "success" | "failed" | "timeout";
+  statusCode: number | null;
+  error: string | null;
+  attempt: number;
+}> {
+  await loadPersisted();
+  const job = getJob(jobId);
+  if (!job) {
+    return { ok: false, status: "failed", statusCode: null, error: "job not found", attempt: 0 };
+  }
+  if (!job.callback_url) {
+    return { ok: false, status: "failed", statusCode: null, error: "no callback_url on job", attempt: 0 };
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(job.callback_url);
+  } catch {
+    return { ok: false, status: "failed", statusCode: null, error: "invalid callback_url", attempt: 0 };
+  }
+  if (!["https:", "http:"].includes(parsed.protocol)) {
+    return { ok: false, status: "failed", statusCode: null, error: "unsupported protocol", attempt: 0 };
+  }
+
+  const payload = {
+    event: "job_completed",
+    jobId: job.jobId,
+    repo: job.repo,
+    ref: job.ref,
+    status: job.status,
+    durationMs: job.durationMs,
+    summary: job.summary,
+    error: job.error,
+    finishedAt: job.finishedAt,
+    statusUrl: `/api/verify/${job.jobId}`,
+    manualRetry: true,
+  };
+
+  const redactedUrl = redactCallbackUrl(job.callback_url);
+  const prevAttempts = job.webhookDeliveries?.length ?? 0;
+  const attemptNum = prevAttempts + 1;
+
+  const ok = await attemptDelivery(jobId, job.callback_url, redactedUrl, attemptNum, payload);
+  const updated = getJob(jobId);
+  const lastDelivery = updated?.webhookDeliveries?.[updated.webhookDeliveries.length - 1];
+  return {
+    ok,
+    status: lastDelivery?.status ?? "failed",
+    statusCode: lastDelivery?.statusCode ?? null,
+    error: lastDelivery?.error ?? null,
+    attempt: attemptNum,
+  };
+}
+
+// ---- Scheduler / queue ----
+
+export async function ensureScheduler(): Promise<void> {
+  await loadPersisted();
+  if (schedulerRunning) return;
+  schedulerRunning = true;
+  // Loop forever, draining the queue subject to concurrency.
+  // Use setImmediate to yield between iterations.
+  const tick = () => {
+    void drain().then(() => {
+      setTimeout(tick, 1000);
+    });
+  };
+  tick();
+}
+
+async function drain(): Promise<void> {
+  const cfg = getConfig();
+  // Count running.
+  const { listJobs } = await import("./store");
+  const all = listJobs(500);
+  const running = all.filter((j) => j.status === "running").length;
+  const queued = all.filter((j) => j.status === "queued");
+  let slots = cfg.maxConcurrentJobs - running;
+  for (const job of queued) {
+    if (slots <= 0) break;
+    slots--;
+    // Mark running immediately to avoid double-start.
+    setJobStatus(job.jobId, "running");
+    // Fire and forget; runJob manages its own lifecycle.
+    void runJob(job.jobId).catch(() => {
+      finalize(job.jobId, "failed", "Unhandled executor error");
+    });
+  }
+  trimOldJobs();
+}
+
+export interface CreateJobInput {
+  repo: string;
+  ref: string;
+  expected_head?: string;
+  commands: string[];
+  continue_on_error: boolean;
+  metadata: Record<string, unknown>;
+  callback_url?: string;
+  tags?: string[];
+  /**
+   * Transient per-request GitHub clone token (github_passthrough mode).
+   * Forwarded to createJob → runtime (in-memory, never persisted). The
+   * executor uses it to clone private repos; redact.ts scrubs it from any
+   * captured stderr.
+   */
+  githubToken?: string;
+}
+
+export async function enqueueJob(input: CreateJobInput): Promise<Job> {
+  await loadPersisted();
+  const job = createJob(input);
+  void ensureScheduler();
+  return job;
+}
+
+/**
+ * Run a verification job synchronously (inline within the caller's request).
+ *
+ * Unlike `enqueueJob` (which queues the job for the background scheduler),
+ * this function:
+ *   1. Creates the job record (status = "queued").
+ *   2. Immediately marks it as "running" so the background scheduler does NOT
+ *      pick it up (the scheduler only drains "queued" jobs).
+ *   3. Calls `runJob(jobId)` directly and awaits completion.
+ *   4. Returns the final job state (success / failed / timeout / canceled).
+ *
+ * The workspace is always cleaned up in `runJob`'s finally block, so
+ * `cleanupStatus` will be "done" by the time this returns.
+ *
+ * Respects COMMAND_TIMEOUT_MS (per-command) and JOB_TIMEOUT_MS (overall job)
+ * via the timers set inside `runJob`. If the job exceeds JOB_TIMEOUT_MS, it
+ * is finalized with status "timeout".
+ *
+ * This is used by `POST /api/verify?mode=sync` and MCP
+ * `create_verification_job` with `mode: "sync"`.
+ *
+ * NOTE: We intentionally do NOT call `ensureScheduler()` here. The scheduler
+ * internally calls `loadPersisted()`, which can race with `createJob` and
+ * delete the newly created job (which hasn't been persisted to disk yet)
+ * before `runJob` picks it up. The scheduler is started separately by the
+ * async endpoints and the health check.
+ */
+export async function runJobSync(input: CreateJobInput): Promise<Job> {
+  await loadPersisted();
+  const job = createJob(input);
+  // Mark running immediately to prevent the background scheduler from also
+  // picking up this job on its next drain tick (1s interval). The scheduler
+  // only drains jobs with status "queued".
+  setJobStatus(job.jobId, "running");
+  // Run the job inline and wait for it to fully complete (including cleanup).
+  try {
+    await runJob(job.jobId);
+  } catch {
+    // runJob's finally block always finalizes + cleans up, but if something
+    // unexpected throws before the finally, ensure the job is marked failed.
+    const cur = getJob(job.jobId);
+    if (cur && (cur.status === "running" || cur.status === "queued")) {
+      finalize(job.jobId, "failed", "Sync executor error");
+    }
+  }
+  const final = getJob(job.jobId);
+  // final is guaranteed to exist because we created it above and runJob
+  // never deletes jobs. Fall back to the original job object as a safety net.
+  return final ?? job;
+}
+
+// Update the tags array on a stored job. Returns the updated job or null if
+// the job does not exist. Persists the change to disk (best-effort).
+export async function updateJobTags(jobId: string, tags: string[]): Promise<Job | null> {
+  await loadPersisted();
+  const updated = updateJob(jobId, { tags });
+  return updated ?? null;
+}
+
+export function requestCancel(jobId: string): boolean {
+  const job = getJob(jobId);
+  if (!job) return false;
+  if (job.status !== "running" && job.status !== "queued") return false;
+  const rt = getRuntime(jobId);
+  if (rt) {
+    rt.cancelRequested = true;
+    if (rt.currentChild) {
+      try {
+        rt.currentChild.kill("SIGTERM");
+      } catch {
+        // ignore
+      }
+    }
+  }
+  if (job.status === "queued") {
+    // Queued jobs can be canceled immediately.
+    finalize(jobId, "canceled", "canceled while queued");
+  } else {
+    updateJob(jobId, { error: "cancel requested" });
+  }
+  return true;
+}

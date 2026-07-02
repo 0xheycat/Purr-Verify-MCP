@@ -1,0 +1,666 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.225 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.245 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Custom scrollbar styling */
+@layer base {
+  /* Thin scrollbar for webkit browsers */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: oklch(0.7 0 0 / 30%);
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: oklch(0.6 0 0 / 50%);
+  }
+  .dark ::-webkit-scrollbar-thumb {
+    background: oklch(0.4 0 0 / 40%);
+  }
+  .dark ::-webkit-scrollbar-thumb:hover {
+    background: oklch(0.5 0 0 / 60%);
+  }
+
+  /* Firefox */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: oklch(0.7 0 0 / 30%) transparent;
+  }
+  .dark * {
+    scrollbar-color: oklch(0.4 0 0 / 40%) transparent;
+  }
+
+  /* Log viewer styling */
+  .log-viewer {
+    font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 11px;
+    line-height: 1.6;
+    tab-size: 2;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  /* Pulse animation for active job indicators */
+  @keyframes subtle-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+  .animate-subtle-pulse {
+    animation: subtle-pulse 2s ease-in-out infinite;
+  }
+
+  /* Gradient animation for borders */
+  @keyframes gradient-shift {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+  }
+  .animate-gradient-shift {
+    background-size: 200% 200%;
+    animation: gradient-shift 3s ease infinite;
+  }
+
+  /* Shimmer loading effect — diagonal gradient sweep */
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+  .shimmer-bg {
+    background-image: linear-gradient(110deg, transparent 30%, rgba(245, 158, 11, 0.08) 50%, transparent 70%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s linear infinite;
+  }
+
+  /* Fade in + slide up entrance */
+  @keyframes fade-in-up {
+    0% { opacity: 0; transform: translateY(8px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  .animate-fade-in-up {
+    animation: fade-in-up 0.4s ease-out;
+  }
+
+  /* Scale-in entrance */
+  @keyframes scale-in {
+    0% { opacity: 0; transform: scale(0.96); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+  .animate-scale-in {
+    animation: scale-in 0.2s ease-out;
+  }
+
+  /* Slide in from the right */
+  @keyframes slide-in-right {
+    0% { opacity: 0; transform: translateX(12px); }
+    100% { opacity: 1; transform: translateX(0); }
+  }
+  .animate-slide-in-right {
+    animation: slide-in-right 0.3s ease-out;
+  }
+
+  /* Amber glow pulse — radiating ring */
+  @keyframes glow-pulse {
+    0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4); }
+    100% { box-shadow: 0 0 0 8px rgba(245, 158, 11, 0); }
+  }
+  .animate-glow-pulse {
+    animation: glow-pulse 2s ease-out infinite;
+  }
+
+  /* Bounce-in — overshoot pop entrance */
+  @keyframes bounce-in {
+    0% { opacity: 0; transform: scale(0.3); }
+    50% { transform: scale(1.05); }
+    75% { transform: scale(0.95); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+  .animate-bounce-in {
+    animation: bounce-in 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  }
+
+  /* Glass surface — translucent background + backdrop blur */
+  .glass {
+    background: color-mix(in srgb, var(--background) 70%, transparent);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+
+  /* Count-up entrance — opacity + small Y translate */
+  @keyframes count-up {
+    0% { opacity: 0; transform: translateY(6px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  .animate-count-up {
+    animation: count-up 0.6s ease-out;
+  }
+
+  /* Marching-ants stripe animation for progress bars */
+  @keyframes stripe-march {
+    0% { background-position: 0 0; }
+    100% { background-position: 1rem 0; }
+  }
+  .animate-stripes {
+    background-image: linear-gradient(
+      45deg,
+      rgba(255, 255, 255, 0.15) 25%,
+      transparent 25%,
+      transparent 50%,
+      rgba(255, 255, 255, 0.15) 50%,
+      rgba(255, 255, 255, 0.15) 75%,
+      transparent 75%,
+      transparent
+    );
+    background-size: 1rem 1rem;
+    animation: stripe-march 0.6s linear infinite;
+  }
+
+  /* Ping ring — radiating halo for "live" indicators */
+  @keyframes ping-ring {
+    0% { transform: scale(1); opacity: 0.6; }
+    100% { transform: scale(2.2); opacity: 0; }
+  }
+  .animate-ping-ring {
+    animation: ping-ring 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+
+  /* Horizontal shake — error feedback */
+  @keyframes shake-x {
+    0% { transform: translateX(0); }
+    25% { transform: translateX(-4px); }
+    50% { transform: translateX(4px); }
+    75% { transform: translateX(-2px); }
+    100% { transform: translateX(0); }
+  }
+  .animate-shake-x {
+    animation: shake-x 0.4s ease-in-out;
+  }
+
+  /* Gentle vertical float — empty-state icons */
+  @keyframes float-y {
+    0% { transform: translateY(0); }
+    50% { transform: translateY(-6px); }
+    100% { transform: translateY(0); }
+  }
+  .animate-float-y {
+    animation: float-y 3s ease-in-out infinite;
+  }
+
+  /* Animated checkmark stroke — success SVG draw-in */
+  @keyframes draw-check {
+    0% { stroke-dashoffset: 24; }
+    100% { stroke-dashoffset: 0; }
+  }
+  .animate-draw-check {
+    stroke-dasharray: 24;
+    stroke-dashoffset: 24;
+    animation: draw-check 0.5s ease-out 0.2s forwards;
+  }
+
+  /* Amber gradient text — accent headings */
+  .text-gradient-amber {
+    background: linear-gradient(135deg, #f59e0b 0%, #f97316 50%, #ea580c 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Card hover lift — subtle elevate + amber glow shadow */
+  .card-hover-lift {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+  }
+  .card-hover-lift:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px -8px rgba(245, 158, 11, 0.18);
+  }
+
+  /* Three bouncing amber dots — "running" status indicator.
+     The host element renders the center dot (8×8 currentColor disk).
+     ::before and ::after render the left and right dots, positioned
+     absolutely 10px to either side. `margin: 0 10px` on the host
+     reserves horizontal layout space so the side dots don't overlap
+     siblings. All three dots share the `dot-bounce` keyframe with
+     staggered delays (0 / 0.15s / 0.3s). The host's transform also
+     visually scales the absolutely-positioned pseudo-elements, which
+     gives the side dots a slightly more dramatic bounce (compound
+     scaling) — a nice side effect rather than a problem. */
+  .dot-loading {
+    position: relative;
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 9999px;
+    background-color: currentColor;
+    margin-left: 10px;
+    margin-right: 10px;
+    vertical-align: middle;
+    animation: dot-bounce 1.2s ease-in-out infinite;
+    animation-delay: 0.15s;
+  }
+  .dot-loading::before,
+  .dot-loading::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    width: 8px;
+    height: 8px;
+    border-radius: 9999px;
+    background-color: currentColor;
+    animation: dot-bounce 1.2s ease-in-out infinite;
+  }
+  .dot-loading::before {
+    left: -10px;
+    animation-delay: 0s;
+  }
+  .dot-loading::after {
+    right: -10px;
+    animation-delay: 0.3s;
+  }
+  @keyframes dot-bounce {
+    0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+    40% { transform: scale(1); opacity: 1; }
+  }
+
+  /* ── Phase 8 styling polish additions ───────────────────────────
+     The following utilities were added in Task 14 to support refined
+     micro-animations across the dashboard. They reuse the existing
+     amber palette and animation conventions established above. */
+
+  /* Grow-up — vertical scale-from-bottom entrance for bar charts.
+     The element keeps its inline `height` style and instead animates
+     `transform: scaleY()` so the layout box is stable while the
+     visible bar grows. transform-origin is forced to bottom. */
+  @keyframes grow-up {
+    0% { transform: scaleY(0); opacity: 0.4; }
+    60% { opacity: 1; }
+    100% { transform: scaleY(1); opacity: 1; }
+  }
+  .animate-grow-up {
+    transform-origin: bottom;
+    animation: grow-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  /* Shimmer success overlay — absolutely-positioned sweep that
+     celebrates a 100% success-rate bar. Brighter than the existing
+     amber `.shimmer-bg` so it reads cleanly on emerald gradients.
+     Reuses the `shimmer` keyframe defined above. */
+  .shimmer-success-overlay {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background-image: linear-gradient(
+      110deg,
+      transparent 30%,
+      rgba(255, 255, 255, 0.55) 50%,
+      transparent 70%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.6s linear infinite;
+    pointer-events: none;
+  }
+
+  /* Sticky-shadow — for sticky table headers so it's visually clear
+     that content is scrolling underneath. A subtle bottom-anchored
+     shadow + soft amber bottom border. */
+  .sticky-shadow {
+    box-shadow: 0 4px 12px -8px rgba(245, 158, 11, 0.25);
+  }
+
+  /* Subtle amber ring pulse — for the "peak hour" cell on the
+     activity heatmap. Smaller and slower than `.animate-glow-pulse`
+     so it doesn't dominate the grid. */
+  @keyframes peak-ring {
+    0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.55); }
+    70% { box-shadow: 0 0 0 4px rgba(245, 158, 11, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+  }
+  .animate-peak-ring {
+    animation: peak-ring 1.8s ease-out infinite;
+  }
+
+  /* ── Phase 9 additions ───────────────────────────────────────────
+     Utilities for the command palette, QR code dialog, and
+     additional micro-interactions. */
+
+  /* Subtle background drift for the header's decorative orb so the
+     dashboard feels "alive" without being distracting. 28s slow loop. */
+  @keyframes orb-drift {
+    0%, 100% { transform: translateX(-50%) translateY(0) scale(1); }
+    50% { transform: translateX(-50%) translateY(8px) scale(1.06); }
+  }
+  .animate-orb-drift {
+    animation: orb-drift 28s ease-in-out infinite;
+  }
+
+  /* Soft amber glow that radiates behind the command palette trigger
+     button when hovered — signals "this is interactive". */
+  @keyframes palette-glow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+    50% { box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.18); }
+  }
+  .animate-palette-glow {
+    animation: palette-glow 1.6s ease-in-out infinite;
+  }
+
+  /* Used by the QrCodeDialog to scale in the QR image once generated. */
+  @keyframes scale-in {
+    from { transform: scale(0.92); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+  }
+  .animate-scale-in {
+    animation: scale-in 0.25s ease-out both;
+  }
+
+  /* ── Task 4 styling polish additions ──────────────────────────────
+     Micro-interactions, animations, and utility classes for enhanced
+     visual polish across the dashboard. */
+
+  /* Blinking typing cursor — used next to command count text */
+  @keyframes typing-cursor {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+  .animate-typing-cursor {
+    animation: typing-cursor 1s step-end infinite;
+  }
+
+  /* Button shimmer — a moving gradient highlight that sweeps across
+     the button surface on hover. Applied via a pseudo-element overlay. */
+  @keyframes btn-shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+  }
+  .btn-shimmer {
+    position: relative;
+    overflow: hidden;
+  }
+  .btn-shimmer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      110deg,
+      transparent 25%,
+      rgba(255, 255, 255, 0.2) 50%,
+      transparent 75%
+    );
+    transform: translateX(-100%);
+    transition: none;
+    pointer-events: none;
+  }
+  .btn-shimmer:hover::after {
+    animation: btn-shimmer 0.6s ease-out;
+  }
+
+  /* Staggered row fade-in — each row fades in with a configurable delay.
+     Used with inline style `animation-delay: Nms`. */
+  @keyframes row-fade-in {
+    0% { opacity: 0; transform: translateY(6px) translateX(0); }
+    100% { opacity: 1; transform: translateY(0) translateX(0); }
+  }
+  .animate-row-fade-in {
+    animation: row-fade-in 0.35s ease-out both;
+  }
+
+  /* Row slide-right on hover — subtle translateX nudge */
+  .row-slide-hover {
+    transition: transform 0.15s ease, background-color 0.15s ease;
+  }
+  .row-slide-hover:hover {
+    transform: translateX(2px);
+  }
+
+  /* Status badge pulse — continuous soft pulse for "running" badges */
+  @keyframes status-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.65; }
+  }
+  .animate-status-pulse {
+    animation: status-pulse 1.8s ease-in-out infinite;
+  }
+
+  /* Status badge flash-green — brief green flash for "success" on mount */
+  @keyframes flash-green {
+    0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6); }
+    50% { box-shadow: 0 0 12px 4px rgba(16, 185, 129, 0.3); }
+    100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+  }
+  .animate-flash-green {
+    animation: flash-green 0.6s ease-out;
+  }
+
+  /* Status badge subtle shake — for "failed" on mount */
+  @keyframes shake-subtle {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-3px); }
+    40% { transform: translateX(3px); }
+    60% { transform: translateX(-2px); }
+    80% { transform: translateX(2px); }
+  }
+  .animate-shake-subtle {
+    animation: shake-subtle 0.4s ease-in-out;
+  }
+
+  /* Footer animated gradient line — continuous left-to-right movement */
+  @keyframes gradient-line-move {
+    0% { background-position: 0% 50%; }
+    100% { background-position: 200% 50%; }
+  }
+  .animate-gradient-line {
+    background-size: 200% 100%;
+    animation: gradient-line-move 3s linear infinite;
+  }
+
+  /* Typewriter reveal for accordion content — max-height + opacity */
+  .typewriter-reveal {
+    overflow: hidden;
+    max-height: 0;
+    opacity: 0;
+    transition: max-height 0.4s ease-out, opacity 0.3s ease-out;
+  }
+  .typewriter-reveal[data-state="open"] {
+    max-height: 2000px;
+    opacity: 1;
+  }
+
+  /* Log gradient overlays — fade top and bottom of long log outputs */
+  .log-gradient-overlay {
+    position: relative;
+  }
+  .log-gradient-overlay::before,
+  .log-gradient-overlay::after {
+    content: "";
+    position: sticky;
+    left: 0;
+    right: 0;
+    height: 24px;
+    pointer-events: none;
+    z-index: 1;
+    display: block;
+  }
+  .log-gradient-overlay::before {
+    top: 0;
+    background: linear-gradient(to bottom, var(--background), transparent);
+    margin-bottom: -24px;
+  }
+  .log-gradient-overlay::after {
+    bottom: 0;
+    background: linear-gradient(to top, var(--background), transparent);
+    margin-top: -24px;
+  }
+
+  /* Progress bar shimmer — animated diagonal stripe while running */
+  @keyframes progress-shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+  .animate-progress-shimmer {
+    background-image: linear-gradient(
+      110deg,
+      transparent 25%,
+      rgba(255, 255, 255, 0.25) 50%,
+      transparent 75%
+    );
+    background-size: 200% 100%;
+    animation: progress-shimmer 1.2s linear infinite;
+  }
+
+  /* Empty state bounce — gentle bounce for empty state icons */
+  @keyframes empty-bounce {
+    0%, 100% { transform: translateY(0); }
+    30% { transform: translateY(-10px); }
+    50% { transform: translateY(-4px); }
+    70% { transform: translateY(-7px); }
+  }
+  .animate-empty-bounce {
+    animation: empty-bounce 2s ease-in-out infinite;
+  }
+
+  /* Logo icon hover pulse — subtle scale + glow on the Cat icon wrapper */
+  .logo-icon-hover {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+  }
+  .logo-icon-hover:hover {
+    transform: scale(1.08);
+    box-shadow: 0 0 16px 2px rgba(245, 158, 11, 0.35);
+  }
+
+  /* Footer Cat rotation on hover */
+  .footer-cat-hover {
+    transition: transform 0.3s ease;
+  }
+  .footer-cat-hover:hover {
+    transform: rotate(15deg);
+  }
+
+  /* Ensure all interactive elements have smooth transitions */
+  .transition-smooth {
+    transition-property: all;
+    transition-duration: 200ms;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+}
+
