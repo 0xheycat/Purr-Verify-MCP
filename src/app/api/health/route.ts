@@ -33,6 +33,7 @@ export async function GET() {
     nodeVersion: process.version,
     bunVersion: (process.versions as unknown as { bun?: string }).bun ?? null,
     workspaceRoot: cfg.workdirBase,
+    toolchainCacheRoot: cfg.toolchainCacheRoot,
   };
   return NextResponse.json(body);
 }

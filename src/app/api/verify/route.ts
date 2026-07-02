@@ -67,6 +67,8 @@ export async function POST(req: NextRequest) {
     // caller's PAT. Undefined in server_token mode → executor uses env
     // GITHUB_TOKEN. Never persisted to disk.
     githubToken: auth.githubToken,
+    env: validation.env,
+    resolutionProbePackages: validation.resolutionProbePackages,
   };
 
   if (effectiveMode === "sync") {

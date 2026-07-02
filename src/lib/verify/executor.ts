@@ -20,6 +20,12 @@ import { getConfig, isRepoAllowed, isValidHead, isValidRef } from "./config";
 import { parseCommand } from "./parse";
 import { redactText } from "./redact";
 import {
+  buildToolchainEnv,
+  installStrategy,
+  normalizeBunx,
+  prepareToolchain,
+} from "./toolchain";
+import {
   clearRuntime,
   createJob,
   getJob,
@@ -29,7 +35,15 @@ import {
   trimOldJobs,
   updateJob,
 } from "./store";
-import type { CommandResult, Job, JobStatus, WebhookDelivery } from "./types";
+import type {
+  CommandResult,
+  EffectiveToolchain,
+  InstallStrategy,
+  Job,
+  JobStatus,
+  ResolutionProbeResult,
+  WebhookDelivery,
+} from "./types";
 
 let schedulerRunning = false;
 
@@ -197,6 +211,89 @@ async function removeDir(dir: string): Promise<void> {
   }
 }
 
+function publicToolchain(toolchain: EffectiveToolchain): EffectiveToolchain {
+  return {
+    declared: toolchain.declared,
+    nodeVersion: toolchain.nodeVersion,
+    bunVersion: toolchain.bunVersion,
+    warnings: toolchain.warnings,
+  };
+}
+
+function commandLine(program: string, args: string[]): string {
+  return [program, ...args].join(" ");
+}
+
+async function runResolutionProbe(
+  workdir: string,
+  packages: string[],
+  toolchain: EffectiveToolchain,
+  jobEnv: Record<string, string>,
+  envSecrets: string[]
+): Promise<ResolutionProbeResult[]> {
+  if (packages.length === 0) return [];
+  const script = [
+    "const { createRequire } = require('node:module');",
+    "const fs = require('node:fs');",
+    "const requireFromWorkspace = createRequire(process.cwd() + '/package.json');",
+    "const pkgs = JSON.parse(process.argv[1]);",
+    "const out = [];",
+    "for (const name of pkgs) {",
+    "  try {",
+    "    const resolved = requireFromWorkspace.resolve(name);",
+    "    let format = 'unknown';",
+    "    if (/\\.mjs$/i.test(resolved)) format = 'esm';",
+    "    else if (/\\.cjs$/i.test(resolved)) format = 'cjs';",
+    "    else if (/\\.js$/i.test(resolved)) {",
+    "      let dir = resolved;",
+    "      while (dir && dir !== require('node:path').dirname(dir)) {",
+    "        dir = require('node:path').dirname(dir);",
+    "        const pkg = require('node:path').join(dir, 'package.json');",
+    "        if (fs.existsSync(pkg)) {",
+    "          try { format = JSON.parse(fs.readFileSync(pkg, 'utf8')).type === 'module' ? 'esm' : 'cjs'; } catch {}",
+    "          break;",
+    "        }",
+    "      }",
+    "    }",
+    "    out.push({ packageName: name, ok: true, resolved, format });",
+    "  } catch (e) {",
+    "    out.push({ packageName: name, ok: false, error: e && e.message ? e.message : String(e) });",
+    "  }",
+    "}",
+    "process.stdout.write(JSON.stringify(out));",
+  ].join("\n");
+
+  const result = await runSpawn(
+    "node",
+    ["-e", script, JSON.stringify(packages)],
+    {
+      ...buildToolchainEnv(toolchain.pathPrefix ?? [], { PATH: process.env.PATH }),
+      ...jobEnv,
+    } as Record<string, string>,
+    workdir,
+    30_000,
+    200_000,
+    () => {},
+    { cleanNodeEnv: true }
+  );
+  if (result.code !== 0) {
+    return packages.map((packageName) => ({
+      packageName,
+      ok: false,
+      error: redactText(result.stderr || result.stdout || "resolution probe failed", envSecrets),
+    }));
+  }
+  try {
+    return JSON.parse(result.stdout) as ResolutionProbeResult[];
+  } catch {
+    return packages.map((packageName) => ({
+      packageName,
+      ok: false,
+      error: "resolution probe returned invalid JSON",
+    }));
+  }
+}
+
 async function runJob(jobId: string): Promise<void> {
   const job = getJob(jobId);
   if (!job) return;
@@ -210,6 +307,7 @@ async function runJob(jobId: string): Promise<void> {
   const envSecrets = Object.values(jobEnv).filter(
     (v) => typeof v === "string" && v.length >= 4
   );
+  const resolutionProbePackages = rt.resolutionProbePackages ?? [];
 
   const startedAt = nowIso();
   const startMs = Date.now();
@@ -277,6 +375,16 @@ async function runJob(jobId: string): Promise<void> {
       }
     }
 
+    const toolchain = await prepareToolchain(workdir);
+    const toolchainPublic = publicToolchain(toolchain);
+    updateJob(jobId, { toolchain: toolchainPublic });
+    const jobCacheDir = path.join(workdir, ".purr-cache");
+    const jobCacheEnv: Record<string, string> = {
+      BUN_INSTALL_CACHE_DIR: path.join(jobCacheDir, "bun"),
+      npm_config_cache: path.join(jobCacheDir, "npm"),
+      XDG_CACHE_HOME: path.join(jobCacheDir, "xdg"),
+    };
+
     // Check cancel before running commands.
     if (rt.cancelRequested) {
       finalize(jobId, "canceled", "canceled before commands");
@@ -286,6 +394,8 @@ async function runJob(jobId: string): Promise<void> {
     // Run commands sequentially.
     let failed = false;
     let failedCommand: string | null = null;
+    const installStrategies: InstallStrategy[] = [];
+    let resolutionProbeDone = false;
 
     for (let i = 0; i < job.commands.length; i++) {
       const cmd = job.commands[i];
@@ -304,7 +414,19 @@ async function runJob(jobId: string): Promise<void> {
       const cmdStartMs = Date.now();
       updateCommand(jobId, i, { status: "running", startedAt: cmdStart });
 
-      const parsed = parseCommand(commandStr);
+      const strategy = await installStrategy(workdir, commandStr);
+      if (strategy.mode !== "not-install") {
+        installStrategies.push(strategy);
+        updateJob(jobId, { installStrategies: [...installStrategies] });
+      }
+      const effectiveCommandStr = strategy.effectiveCommand;
+      const parsedRaw = parseCommand(effectiveCommandStr);
+      const normalized = normalizeBunx(parsedRaw.program, parsedRaw.args);
+      const parsed = {
+        ...parsedRaw,
+        program: normalized.program,
+        args: normalized.args,
+      };
       let result: {
         code: number | null;
         stdout: string;
@@ -339,7 +461,14 @@ async function runJob(jobId: string): Promise<void> {
         result = await runSpawn(
           parsed.program,
           parsed.args,
-          { ...jobEnv, ...parsed.env },
+          {
+            ...buildToolchainEnv(toolchain.pathPrefix ?? [], { PATH: process.env.PATH }),
+            ...jobCacheEnv,
+            ...jobEnv,
+            ...parsed.env,
+            NEXT_TELEMETRY_DISABLED: "1",
+            ...(commandStr.startsWith("bun run") ? { NODE_OPTIONS: "--enable-source-maps --trace-uncaught" } : {}),
+          } as Record<string, string>,
           workdir,
           cfg.commandTimeoutMs,
           cfg.maxLogBytes,
@@ -365,14 +494,34 @@ async function runJob(jobId: string): Promise<void> {
       const stderrRed = redactText(result.stderr, envSecrets);
 
       updateCommand(jobId, i, {
+        effectiveCommand: commandLine(parsed.program, parsed.args),
         status,
         exitCode: result.code,
         durationMs,
-        stdout: stdoutRed,
+        stdout:
+          strategy.mode !== "not-install"
+            ? [
+                `[runner] install mode: ${strategy.mode}; lockfile: ${strategy.lockfile ?? "none"}; lockfile honored: ${strategy.lockfileHonored}`,
+                `[runner] toolchain: node ${toolchain.nodeVersion}; bun ${toolchain.bunVersion ?? "unavailable"}`,
+                stdoutRed,
+              ].filter(Boolean).join("\n")
+            : stdoutRed,
         stderr: stderrRed,
         truncated: result.truncated,
+        installStrategy: strategy.mode !== "not-install" ? strategy : undefined,
         finishedAt: nowIso(),
       });
+
+      if (
+        status === "success" &&
+        strategy.mode !== "not-install" &&
+        resolutionProbePackages.length > 0 &&
+        !resolutionProbeDone
+      ) {
+        resolutionProbeDone = true;
+        const probe = await runResolutionProbe(workdir, resolutionProbePackages, toolchain, jobEnv, envSecrets);
+        updateJob(jobId, { resolutionProbe: probe });
+      }
 
       if (status !== "success") {
         failed = true;
@@ -714,6 +863,7 @@ export interface CreateJobInput {
    * from captured logs. Validated in mcp.validateEnv.
    */
   env?: Record<string, string>;
+  resolutionProbePackages?: string[];
 }
 
 export async function enqueueJob(input: CreateJobInput): Promise<Job> {

@@ -75,6 +75,17 @@ const TOOLS: ToolDef[] = [
           additionalProperties: { type: "string" },
           description: "Optional environment variables (string values) injected into every command's process environment. Values may contain secrets — they are redacted from stored logs, results, and share links, and are never persisted to disk. Reserved keys (PATH, NODE_PATH, NODE_OPTIONS, LD_PRELOAD, LD_LIBRARY_PATH, DYLD_INSERT_LIBRARIES) are rejected. Max 50 vars.",
         },
+        resolution_probe: {
+          oneOf: [
+            { type: "array", items: { type: "string" } },
+            {
+              type: "object",
+              properties: { packages: { type: "array", items: { type: "string" } } },
+              required: ["packages"],
+            },
+          ],
+          description: "Optional diagnostic package list. After a successful install, the runner reports each package's resolved entry file and inferred ESM/CJS format from the cloned workspace.",
+        },
       },
       required: ["repo", "ref", "commands"],
     },
@@ -250,6 +261,7 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
               nodeVersion: process.version,
               bunVersion: (process.versions as unknown as { bun?: string }).bun ?? null,
               workspaceRoot: cfg.workdirBase,
+              toolchainCacheRoot: cfg.toolchainCacheRoot,
             };
             return rpcResult(rid, { content: [toText(health)], isError: false });
           }
@@ -303,6 +315,7 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
               githubToken: auth.githubToken,
               // Optional per-job env injection (validated + redacted from logs).
               env: validation.env,
+              resolutionProbePackages: validation.resolutionProbePackages,
             };
 
             // Determine execution mode. Default is "async".
@@ -447,6 +460,7 @@ export function validateCreateInput(input: VerifyRequest): {
   commands?: string[];
   tags?: string[];
   env?: Record<string, string>;
+  resolutionProbePackages?: string[];
 } {
   if (!input || typeof input !== "object") return { ok: false, reason: "invalid body" };
   if (!input.repo || typeof input.repo !== "string")
@@ -464,7 +478,42 @@ export function validateCreateInput(input: VerifyRequest): {
   if (!tv.ok) return { ok: false, reason: tv.reason };
   const ev = validateEnv(input.env);
   if (!ev.ok) return { ok: false, reason: ev.reason };
-  return { ok: true, commands: cv.commands, tags: tv.tags, env: ev.env };
+  const rp = validateResolutionProbe(input.resolution_probe);
+  if (!rp.ok) return { ok: false, reason: rp.reason };
+  return { ok: true, commands: cv.commands, tags: tv.tags, env: ev.env, resolutionProbePackages: rp.packages };
+}
+
+export function validateResolutionProbe(value: unknown): {
+  ok: boolean;
+  reason?: string;
+  packages: string[];
+} {
+  if (value == null) return { ok: true, packages: [] };
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === "object" && value !== null && Array.isArray((value as { packages?: unknown }).packages)
+      ? (value as { packages: unknown[] }).packages
+      : null;
+  if (!raw) return { ok: false, reason: "resolution_probe must be an array or { packages: [...] }", packages: [] };
+  if (raw.length > 20) return { ok: false, reason: "resolution_probe supports max 20 packages", packages: [] };
+  const PACKAGE_RE = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (typeof item !== "string") {
+      return { ok: false, reason: "resolution_probe package names must be strings", packages: [] };
+    }
+    const name = item.trim();
+    if (!PACKAGE_RE.test(name) || name.includes("..")) {
+      return { ok: false, reason: `invalid resolution_probe package: ${name}`, packages: [] };
+    }
+    const key = name.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(name);
+    }
+  }
+  return { ok: true, packages: out };
 }
 
 // Validate the optional `env` field: a Record<string,string> of environment
