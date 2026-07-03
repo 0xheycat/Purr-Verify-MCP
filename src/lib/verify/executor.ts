@@ -204,7 +204,25 @@ async function cloneRepo(
     if (res2.code !== 0) {
       return { ok: false, error: redactText(`git clone failed: ${res2.stderr || res2.stdout || "unknown error"}`) };
     }
-    const co = await runSpawn("git", ["checkout", ref], {}, workdir, 60_000, 100_000, () => {});
+    let co = await runSpawn("git", ["checkout", ref], {}, workdir, 60_000, 100_000, () => {});
+    if (co.code !== 0) {
+      const exactSha = /^[0-9a-fA-F]{40}$/.test(ref);
+      if (exactSha) {
+        await runSpawn("git", ["fetch", "--depth=1", "origin", ref], {}, workdir, 120_000, 200_000, () => {});
+      } else {
+        await runSpawn(
+          "git",
+          ["fetch", "--prune", "--tags", "origin", "+refs/heads/*:refs/remotes/origin/*"],
+          {},
+          workdir,
+          180_000,
+          300_000,
+          () => {}
+        );
+        await runSpawn("git", ["fetch", "--unshallow", "origin"], {}, workdir, 300_000, 300_000, () => {});
+      }
+      co = await runSpawn("git", ["checkout", ref], {}, workdir, 60_000, 100_000, () => {});
+    }
     if (co.code !== 0) {
       return { ok: false, error: redactText(`git checkout ${ref} failed: ${co.stderr || co.stdout}`) };
     }
