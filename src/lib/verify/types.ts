@@ -56,10 +56,18 @@ export interface InstallStrategy {
 
 export interface ResolutionProbeRequest {
   packages: string[];
+  modules?: ResolutionProbeModuleRequest[];
+}
+
+export interface ResolutionProbeModuleRequest {
+  specifier: string;
+  exports?: string[];
 }
 
 export interface ResolutionProbeResult {
   packageName: string;
+  probeType?: "package" | "module";
+  specifier?: string;
   ok: boolean;
   resolved?: string;
   format?: "esm" | "cjs" | "unknown";
@@ -91,6 +99,8 @@ export interface ResolutionProbeResult {
     executable?: string;
     error?: string;
   };
+  requestedExports?: string[];
+  missingExports?: string[];
   error?: string;
 }
 

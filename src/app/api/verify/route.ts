@@ -69,6 +69,7 @@ export async function POST(req: NextRequest) {
     githubToken: auth.githubToken,
     env: validation.env,
     resolutionProbePackages: validation.resolutionProbePackages,
+    resolutionProbeModules: validation.resolutionProbeModules,
   };
 
   if (effectiveMode === "sync") {

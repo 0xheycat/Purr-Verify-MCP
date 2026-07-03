@@ -21,7 +21,7 @@ import {
   listShareTokensForJob,
   revokeAllForJob,
 } from "./share";
-import type { HealthResponse, Job, VerifyRequest } from "./types";
+import type { HealthResponse, Job, ResolutionProbeModuleRequest, VerifyRequest } from "./types";
 
 export interface JsonRpcRequest {
   jsonrpc?: string;
@@ -80,11 +80,23 @@ const TOOLS: ToolDef[] = [
             { type: "array", items: { type: "string" } },
             {
               type: "object",
-              properties: { packages: { type: "array", items: { type: "string" } } },
-              required: ["packages"],
+              properties: {
+                packages: { type: "array", items: { type: "string" } },
+                modules: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      specifier: { type: "string" },
+                      exports: { type: "array", items: { type: "string" } },
+                    },
+                    required: ["specifier"],
+                  },
+                },
+              },
             },
           ],
-          description: "Optional diagnostic package list. After a successful install, the runner reports each package's resolved entry file and inferred ESM/CJS format from the cloned workspace.",
+          description: "Optional diagnostic list. After install, reports package resolution plus optional local/alias module export checks under Bun and bun:test.",
         },
       },
       required: ["repo", "ref", "commands"],
@@ -320,6 +332,7 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
               // Optional per-job env injection (validated + redacted from logs).
               env: validation.env,
               resolutionProbePackages: validation.resolutionProbePackages,
+              resolutionProbeModules: validation.resolutionProbeModules,
             };
 
             // Determine execution mode. Default is "async".
@@ -465,6 +478,7 @@ export function validateCreateInput(input: VerifyRequest): {
   tags?: string[];
   env?: Record<string, string>;
   resolutionProbePackages?: string[];
+  resolutionProbeModules?: ResolutionProbeModuleRequest[];
 } {
   if (!input || typeof input !== "object") return { ok: false, reason: "invalid body" };
   if (!input.repo || typeof input.repo !== "string")
@@ -484,32 +498,59 @@ export function validateCreateInput(input: VerifyRequest): {
   if (!ev.ok) return { ok: false, reason: ev.reason };
   const rp = validateResolutionProbe(input.resolution_probe);
   if (!rp.ok) return { ok: false, reason: rp.reason };
-  return { ok: true, commands: cv.commands, tags: tv.tags, env: ev.env, resolutionProbePackages: rp.packages };
+  return {
+    ok: true,
+    commands: cv.commands,
+    tags: tv.tags,
+    env: ev.env,
+    resolutionProbePackages: rp.packages,
+    resolutionProbeModules: rp.modules,
+  };
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    if (!seen.has(value)) {
+      seen.add(value);
+      out.push(value);
+    }
+  }
+  return out;
 }
 
 export function validateResolutionProbe(value: unknown): {
   ok: boolean;
   reason?: string;
   packages: string[];
+  modules: ResolutionProbeModuleRequest[];
 } {
-  if (value == null) return { ok: true, packages: [] };
+  if (value == null) return { ok: true, packages: [], modules: [] };
   const raw = Array.isArray(value)
     ? value
     : typeof value === "object" && value !== null && Array.isArray((value as { packages?: unknown }).packages)
       ? (value as { packages: unknown[] }).packages
       : null;
-  if (!raw) return { ok: false, reason: "resolution_probe must be an array or { packages: [...] }", packages: [] };
-  if (raw.length > 20) return { ok: false, reason: "resolution_probe supports max 20 packages", packages: [] };
+  const rawModules =
+    typeof value === "object" && value !== null && Array.isArray((value as { modules?: unknown }).modules)
+      ? (value as { modules: unknown[] }).modules
+      : [];
+  if (!raw && rawModules.length === 0) {
+    return { ok: false, reason: "resolution_probe must be an array or { packages: [...], modules?: [...] }", packages: [], modules: [] };
+  }
+  if ((raw?.length ?? 0) > 20) return { ok: false, reason: "resolution_probe supports max 20 packages", packages: [], modules: [] };
+  if (rawModules.length > 20) return { ok: false, reason: "resolution_probe supports max 20 modules", packages: [], modules: [] };
   const PACKAGE_RE = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i;
   const out: string[] = [];
   const seen = new Set<string>();
-  for (const item of raw) {
+  for (const item of raw ?? []) {
     if (typeof item !== "string") {
-      return { ok: false, reason: "resolution_probe package names must be strings", packages: [] };
+      return { ok: false, reason: "resolution_probe package names must be strings", packages: [], modules: [] };
     }
     const name = item.trim();
     if (!PACKAGE_RE.test(name) || name.includes("..")) {
-      return { ok: false, reason: `invalid resolution_probe package: ${name}`, packages: [] };
+      return { ok: false, reason: `invalid resolution_probe package: ${name}`, packages: [], modules: [] };
     }
     const key = name.toLowerCase();
     if (!seen.has(key)) {
@@ -517,7 +558,37 @@ export function validateResolutionProbe(value: unknown): {
       out.push(name);
     }
   }
-  return { ok: true, packages: out };
+  const modules: ResolutionProbeModuleRequest[] = [];
+  const seenModules = new Set<string>();
+  const MODULE_RE = /^(?:@\/|\.\/|src\/)[A-Za-z0-9_./-]+$/;
+  const EXPORT_RE = /^[$A-Z_a-z][$\w]*$/;
+  for (const item of rawModules) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return { ok: false, reason: "resolution_probe modules must be objects", packages: [], modules: [] };
+    }
+    const specifier = String((item as { specifier?: unknown }).specifier ?? "").trim();
+    if (!MODULE_RE.test(specifier) || specifier.includes("..") || specifier.includes("\\")) {
+      return { ok: false, reason: `invalid resolution_probe module: ${specifier}`, packages: [], modules: [] };
+    }
+    const rawExports = (item as { exports?: unknown }).exports;
+    if (rawExports != null && !Array.isArray(rawExports)) {
+      return { ok: false, reason: `resolution_probe module exports must be an array: ${specifier}`, packages: [], modules: [] };
+    }
+    const exports = uniqueStrings(
+      (rawExports ?? [])
+        .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+        .filter(Boolean)
+    );
+    if (exports.length > 50 || exports.some((name) => !EXPORT_RE.test(name))) {
+      return { ok: false, reason: `invalid resolution_probe module exports: ${specifier}`, packages: [], modules: [] };
+    }
+    const key = `${specifier}\0${exports.join(",")}`;
+    if (!seenModules.has(key)) {
+      seenModules.add(key);
+      modules.push({ specifier, exports });
+    }
+  }
+  return { ok: true, packages: out, modules };
 }
 
 // Validate the optional `env` field: a Record<string,string> of environment
