@@ -1,5 +1,9 @@
 # 🐾 Purr Verify MCP
 
+<p align="center">
+  <img src="assets/logo.svg" alt="Purr Verify" width="480" />
+</p>
+
 > **Live-verification runtime for coding agents.** When your agent can *write* code (via GitHub MCP) but can't *run* it, Purr Verify clones the branch, runs an allowlisted build/test set in a **clean, isolated workspace**, redacts secrets, and hands back **trustworthy logs** — over MCP or REST.
 
 ![runtime: Bun](https://img.shields.io/badge/runtime-Bun-black) ![framework: Next.js%2016](https://img.shields.io/badge/framework-Next.js%2016-black) ![language: TypeScript](https://img.shields.io/badge/language-TypeScript-3178c6) ![transport: MCP%20%2B%20REST](https://img.shields.io/badge/transport-MCP%20%2B%20REST-6E56CF) ![license: MIT](https://img.shields.io/badge/license-MIT-green)
