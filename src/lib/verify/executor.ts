@@ -96,14 +96,29 @@ function runSpawn(
   opts?: { cleanNodeEnv?: boolean }
 ): Promise<{ code: number | null; stdout: string; stderr: string; truncated: boolean; timedOut: boolean }> {
   return new Promise((resolve) => {
-    const baseEnv: NodeJS.ProcessEnv = { ...process.env };
+    const baseEnv: Record<string, string | undefined> = opts?.cleanNodeEnv
+      ? {
+          HOME: process.env.HOME,
+          USER: process.env.USER,
+          LOGNAME: process.env.LOGNAME,
+          SHELL: process.env.SHELL,
+          LANG: process.env.LANG,
+          LC_ALL: process.env.LC_ALL,
+          TMPDIR: process.env.TMPDIR,
+          TEMP: process.env.TEMP,
+          TMP: process.env.TMP,
+          PATH: process.env.PATH,
+          PWD: cwd,
+        }
+      : { ...process.env };
     if (opts?.cleanNodeEnv) {
       delete baseEnv.NODE_PATH;
       delete baseEnv.NODE_OPTIONS;
+      delete baseEnv.NODE_ENV;
     }
     const child = spawn(program, args, {
       cwd,
-      env: { ...baseEnv, ...env },
+      env: { ...baseEnv, ...env } as NodeJS.ProcessEnv,
       stdio: ["ignore", "pipe", "pipe"],
       shell: false,
       detached: process.platform !== "win32",
