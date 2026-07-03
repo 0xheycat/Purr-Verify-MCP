@@ -264,6 +264,8 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
               toolchainCacheRoot: cfg.toolchainCacheRoot,
               toolchainDefaultNode: cfg.toolchainDefaultNode || null,
               toolchainDefaultBun: cfg.toolchainDefaultBun || null,
+              commandTimeoutMs: cfg.commandTimeoutMs,
+              jobTimeoutMs: cfg.jobTimeoutMs,
             };
             return rpcResult(rid, { content: [toText(health)], isError: false });
           }

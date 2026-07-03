@@ -36,6 +36,8 @@ export async function GET() {
     toolchainCacheRoot: cfg.toolchainCacheRoot,
     toolchainDefaultNode: cfg.toolchainDefaultNode || null,
     toolchainDefaultBun: cfg.toolchainDefaultBun || null,
+    commandTimeoutMs: cfg.commandTimeoutMs,
+    jobTimeoutMs: cfg.jobTimeoutMs,
   };
   return NextResponse.json(body);
 }
