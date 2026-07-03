@@ -29,9 +29,32 @@ Set global fallbacks on public runners so repos without exact toolchain metadata
 ```bash
 TOOLCHAIN_DEFAULT_NODE=26.3.0
 TOOLCHAIN_DEFAULT_BUN=1.3.14
+COMMAND_TIMEOUT_MS=1800000
+JOB_TIMEOUT_MS=7200000
 ```
 
 These are fallbacks only. The best result is still for each repo to commit exact declarations and lockfiles.
+
+## Preferred Heavy-Repo Workflow
+
+For large Next.js or full-stack repos, split checks instead of hiding everything behind one project script:
+
+```json
+{
+  "commands": [
+    "bun install",
+    "bunx prisma generate",
+    "bun run typecheck",
+    "bun run lint",
+    "bun run build",
+    "bun test"
+  ],
+  "continue_on_error": true,
+  "mode": "async"
+}
+```
+
+This gives agents separate logs and timings for install, codegen, typecheck, lint, build, and tests. `bun run ci:check` remains supported, but jobs will recommend splitting it for long-running repos.
 
 ## Local Self-Test
 
@@ -62,6 +85,8 @@ Expected:
 - `workspaceRoot` is under the OS temp directory, for example `/tmp/purr-verify-workspaces`.
 - `toolchainCacheRoot` is under a writable temp/cache directory, for example `/tmp/purr-verify-toolchains`.
 - `toolchainDefaultNode` and `toolchainDefaultBun` are populated when global fallbacks are configured.
+- `commandTimeoutMs` is high enough for heavy single commands, for example `1800000`.
+- `jobTimeoutMs` is high enough for install + build + full tests, for example `7200000`.
 - `nodeVersion` and `bunVersion` describe the server process only. Per-job effective versions are reported on each job as `toolchain.nodeVersion` and `toolchain.bunVersion`.
 
 ## Calibration Job

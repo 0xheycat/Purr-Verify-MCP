@@ -240,6 +240,28 @@ function commandLine(program: string, args: string[]): string {
   return [program, ...args].join(" ");
 }
 
+function commandWorkflowRecommendations(commands: string[]): string[] {
+  const recommendations: string[] = [];
+  if (commands.includes("bun run ci:check")) {
+    recommendations.push(
+      "For long Next.js repos, prefer split commands (`bun run typecheck`, `bun run lint`, `bun run build`) instead of one `bun run ci:check` so agents get isolated logs, clearer failures, and less wasted rerun time."
+    );
+  }
+  return recommendations;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    if (!seen.has(value)) {
+      seen.add(value);
+      out.push(value);
+    }
+  }
+  return out;
+}
+
 async function runResolutionProbe(
   workdir: string,
   packages: string[],
@@ -416,7 +438,10 @@ async function runJob(jobId: string): Promise<void> {
     const toolchainPublic = publicToolchain(toolchain);
     updateJob(jobId, {
       toolchain: toolchainPublic,
-      runnerRecommendations: toolchain.recommendations,
+      runnerRecommendations: uniqueStrings([
+        ...toolchain.recommendations,
+        ...commandWorkflowRecommendations(job.commands.map((cmd) => cmd.command)),
+      ]),
     });
     const jobCacheDir = path.join(workdir, ".purr-cache");
     const jobCacheEnv: Record<string, string> = {

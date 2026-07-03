@@ -192,6 +192,8 @@ export interface HealthResponse {
   toolchainCacheRoot?: string;
   toolchainDefaultNode?: string | null;
   toolchainDefaultBun?: string | null;
+  commandTimeoutMs?: number;
+  jobTimeoutMs?: number;
 }
 
 // A share token grants public read-only access to a single job's result.

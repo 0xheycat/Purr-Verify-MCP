@@ -492,6 +492,8 @@ If workspace isolation is already deployed and the failure is still identical, u
 
 For public runners, set global fallbacks like `TOOLCHAIN_DEFAULT_NODE=26.3.0` and `TOOLCHAIN_DEFAULT_BUN=1.3.14` so repos without exact toolchain metadata still run under a predictable baseline. Jobs also emit `runnerRecommendations` when a repo should add `.nvmrc`, `packageManager`, or a lockfile for cleaner live verification.
 
+For heavy repos, prefer split commands (`bun run typecheck`, `bun run lint`, `bun run build`, `bun test`) and set long runner limits such as `COMMAND_TIMEOUT_MS=1800000` and `JOB_TIMEOUT_MS=7200000`.
+
 **A sync call times out but the job seems fine.**
 Heavy jobs exceed the ~60s MCP transport window. Use `mode: "async"` and poll `get_verification_job`.
 
