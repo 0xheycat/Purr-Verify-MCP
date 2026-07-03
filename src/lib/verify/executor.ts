@@ -41,6 +41,7 @@ import type {
   InstallStrategy,
   Job,
   JobStatus,
+  ResolutionProbeModuleRequest,
   ResolutionProbeResult,
   WebhookDelivery,
 } from "./types";
@@ -283,11 +284,12 @@ function uniqueStrings(values: string[]): string[] {
 async function runResolutionProbe(
   workdir: string,
   packages: string[],
+  modules: ResolutionProbeModuleRequest[],
   toolchain: EffectiveToolchain,
   jobEnv: Record<string, string>,
   envSecrets: string[]
 ): Promise<ResolutionProbeResult[]> {
-  if (packages.length === 0) return [];
+  if (packages.length === 0 && modules.length === 0) return [];
   const probeDir = path.join(workdir, "node_modules", ".purr-verify-probe");
   await fs.mkdir(probeDir, { recursive: true });
   const probeFile = path.join(probeDir, "resolution-probe.mjs");
@@ -295,9 +297,12 @@ async function runResolutionProbe(
     "import { createRequire } from 'node:module';",
     "import fs from 'node:fs';",
     "import path from 'node:path';",
+    "import { pathToFileURL } from 'node:url';",
     "import { spawnSync } from 'node:child_process';",
     "const requireFromWorkspace = createRequire(path.join(process.cwd(), 'package.json'));",
-    "const pkgs = JSON.parse(process.argv[2] || '[]');",
+    "const input = JSON.parse(process.argv[2] || '{}');",
+    "const pkgs = Array.isArray(input) ? input : (input.packages || []);",
+    "const modules = Array.isArray(input.modules) ? input.modules : [];",
     "const probeDir = path.dirname(new URL(import.meta.url).pathname);",
     "const runtimeExecutable = process.argv[0] || process.execPath;",
     "const out = [];",
@@ -319,7 +324,7 @@ async function runResolutionProbe(
     "  return 'unknown';",
     "}",
     "for (const name of pkgs) {",
-    "  const row = { packageName: name, ok: false };",
+    "  const row = { packageName: name, probeType: 'package', ok: false };",
     "  try {",
     "    const requireResolved = requireFromWorkspace.resolve(name);",
     "    row.require = { ok: true, resolved: requireResolved, format: inferFormat(requireResolved) };",
@@ -356,13 +361,56 @@ async function runResolutionProbe(
     "  if (!row.ok) row.error = row.import?.error || row.require?.error || 'resolution failed';",
     "  out.push(row);",
     "}",
+    "function moduleImportSpecifier(specifier) {",
+    "  if (specifier.startsWith('./')) return new URL(specifier.slice(2), pathToFileURL(process.cwd() + '/')).href;",
+    "  if (specifier.startsWith('src/')) return new URL(specifier, pathToFileURL(process.cwd() + '/')).href;",
+    "  return specifier;",
+    "}",
+    "for (const entry of modules) {",
+    "  const specifier = String(entry.specifier || '');",
+    "  const importSpecifier = moduleImportSpecifier(specifier);",
+    "  const requestedExports = Array.isArray(entry.exports) ? entry.exports : [];",
+    "  const row = { packageName: specifier, specifier, probeType: 'module', ok: false, requestedExports };",
+    "  try {",
+    "    const importResolved = await import.meta.resolve(importSpecifier);",
+    "    const mod = await import(importSpecifier);",
+    "    const namedExports = Object.keys(mod).filter((key) => key !== 'default').slice(0, 200);",
+    "    const missingExports = requestedExports.filter((key) => !Object.prototype.hasOwnProperty.call(mod, key));",
+    "    row.import = { ok: true, resolved: importResolved, format: inferFormat(importResolved), namedExports, hasDefault: Object.prototype.hasOwnProperty.call(mod, 'default') };",
+    "    row.resolved = importResolved;",
+    "    row.format = row.import.format;",
+    "    row.missingExports = missingExports;",
+    "    const staticNames = (requestedExports.length > 0 ? requestedExports : namedExports).filter((key) => /^[$A-Z_a-z][$\\w]*$/.test(key)).slice(0, 50);",
+    "    if (staticNames.length > 0) {",
+    "      const staticProbe = path.join(probeDir, `module-${Buffer.from(specifier).toString('base64url')}.mjs`);",
+    "      fs.writeFileSync(staticProbe, `import { ${staticNames.join(', ')} } from ${JSON.stringify(importSpecifier)};\\nconsole.log('ok');\\n`);",
+    "      const child = spawnSync(runtimeExecutable, [staticProbe], { cwd: process.cwd(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });",
+    "      row.staticNamedImport = child.status === 0 ? { ok: true, tested: staticNames, runtime: 'bun', executable: runtimeExecutable } : { ok: false, tested: staticNames, runtime: 'bun', executable: runtimeExecutable, error: (child.stderr || child.stdout || `exit ${child.status}`).trim() };",
+    "      const testProbe = path.join(probeDir, `module-${Buffer.from(specifier).toString('base64url')}.test.ts`);",
+    "      fs.writeFileSync(testProbe, `import { test, expect } from 'bun:test';\\nimport { ${staticNames.join(', ')} } from ${JSON.stringify(importSpecifier)};\\ntest('static named imports from ${specifier.replace(/'/g, \"\\\\'\")}', () => { expect(typeof ${staticNames[0]}).not.toBe('undefined'); });\\n`);",
+    "      const testChild = spawnSync(runtimeExecutable, ['test', testProbe], { cwd: process.cwd(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });",
+    "      row.bunTestStaticNamedImport = testChild.status === 0 ? { ok: true, tested: staticNames, runtime: 'bun:test', executable: runtimeExecutable } : { ok: false, tested: staticNames, runtime: 'bun:test', executable: runtimeExecutable, error: (testChild.stderr || testChild.stdout || `exit ${testChild.status}`).trim() };",
+    "    } else {",
+    "      row.staticNamedImport = { ok: true, tested: [], runtime: 'bun', executable: runtimeExecutable };",
+    "      row.bunTestStaticNamedImport = { ok: true, tested: [], runtime: 'bun:test', executable: runtimeExecutable };",
+    "    }",
+    "    row.ok = missingExports.length === 0 && row.staticNamedImport?.ok !== false && row.bunTestStaticNamedImport?.ok !== false;",
+    "    if (!row.ok) row.error = missingExports.length > 0 ? `missing exports: ${missingExports.join(', ')}` : (row.bunTestStaticNamedImport?.error || row.staticNamedImport?.error || 'module probe failed');",
+    "  } catch (e) {",
+    "    row.import = { ok: false, error: e && e.message ? e.message : String(e) };",
+    "    row.staticNamedImport = { ok: false, error: row.import.error };",
+    "    row.bunTestStaticNamedImport = { ok: false, error: row.import.error };",
+    "    row.error = row.import.error;",
+    "  }",
+    "  out.push(row);",
+    "}",
     "process.stdout.write(JSON.stringify(out));",
   ].join("\n");
   await fs.writeFile(probeFile, script, "utf8");
 
   const result = await runSpawn(
     "bun",
-    [probeFile, JSON.stringify(packages)],
+    [probeFile, JSON.stringify({ packages, modules })],
     {
       ...buildToolchainEnv(toolchain.pathPrefix ?? [], { PATH: process.env.PATH }),
       ...jobEnv,
@@ -405,6 +453,7 @@ async function runJob(jobId: string): Promise<void> {
     (v) => typeof v === "string" && v.length >= 4
   );
   const resolutionProbePackages = rt.resolutionProbePackages ?? [];
+  const resolutionProbeModules = rt.resolutionProbeModules ?? [];
 
   const startedAt = nowIso();
   const startMs = Date.now();
@@ -618,11 +667,11 @@ async function runJob(jobId: string): Promise<void> {
       if (
         status === "success" &&
         strategy.mode !== "not-install" &&
-        resolutionProbePackages.length > 0 &&
+        (resolutionProbePackages.length > 0 || resolutionProbeModules.length > 0) &&
         !resolutionProbeDone
       ) {
         resolutionProbeDone = true;
-        const probe = await runResolutionProbe(workdir, resolutionProbePackages, toolchain, jobEnv, envSecrets);
+        const probe = await runResolutionProbe(workdir, resolutionProbePackages, resolutionProbeModules, toolchain, jobEnv, envSecrets);
         updateJob(jobId, { resolutionProbe: probe });
       }
 

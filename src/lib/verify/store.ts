@@ -10,7 +10,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ChildProcess } from "node:child_process";
 import { getConfig } from "./config";
-import type { Job, JobStatus } from "./types";
+import type { Job, JobStatus, ResolutionProbeModuleRequest } from "./types";
 
 // Internal runtime tracking (not serialized).
 interface RuntimeState {
@@ -32,6 +32,7 @@ interface RuntimeState {
    */
   env?: Record<string, string> | null;
   resolutionProbePackages?: string[];
+  resolutionProbeModules?: ResolutionProbeModuleRequest[];
 }
 
 const jobs = new Map<string, Job>();
@@ -204,6 +205,7 @@ export function createJob(input: {
    */
   env?: Record<string, string>;
   resolutionProbePackages?: string[];
+  resolutionProbeModules?: ResolutionProbeModuleRequest[];
 }): Job {
   const now = new Date().toISOString();
   const job: Job = {
@@ -248,6 +250,7 @@ export function createJob(input: {
     githubToken: input.githubToken ?? null,
     env: input.env ?? null,
     resolutionProbePackages: input.resolutionProbePackages ?? [],
+    resolutionProbeModules: input.resolutionProbeModules ?? [],
   });
   void persist(job);
   return job;
