@@ -80,6 +80,15 @@ export interface ResolutionProbeResult {
   staticNamedImport?: {
     ok: boolean;
     tested?: string[];
+    runtime?: string;
+    executable?: string;
+    error?: string;
+  };
+  bunTestStaticNamedImport?: {
+    ok: boolean;
+    tested?: string[];
+    runtime?: string;
+    executable?: string;
     error?: string;
   };
   error?: string;
