@@ -281,6 +281,116 @@ function uniqueStrings(values: string[]): string[] {
   return out;
 }
 
+function repoCommandEnv(
+  toolchain: EffectiveToolchain,
+  jobCacheEnv: Record<string, string>,
+  jobEnv: Record<string, string>,
+  parsedEnv: Record<string, string> = {},
+  extraEnv: Record<string, string> = {}
+): Record<string, string> {
+  return {
+    ...buildToolchainEnv(toolchain.pathPrefix ?? [], { PATH: process.env.PATH }),
+    ...jobCacheEnv,
+    ...jobEnv,
+    ...parsedEnv,
+    NEXT_TELEMETRY_DISABLED: "1",
+    ...extraEnv,
+  };
+}
+
+function extractFailedTestFiles(stderr: string, stdout: string): string[] {
+  const text = `${stderr}\n${stdout}`;
+  const files = new Set<string>();
+  const re = /(?:^|\n)((?:scripts|src)\/[^\n\r:]+(?:\.test|\.spec)\.[cm]?[jt]sx?):/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text)) !== null) files.add(match[1]);
+  return Array.from(files).slice(0, 8);
+}
+
+function isBunTestCommand(program: string, args: string[]): boolean {
+  return program === "bun" && args[0] === "test" && args.length === 1;
+}
+
+function isNextBuildFailure(commandStr: string, stdout: string, stderr: string): boolean {
+  const text = `${commandStr}\n${stdout}\n${stderr}`;
+  return /\bnext build\b/.test(text) || /Build error occurred/i.test(text);
+}
+
+async function runFailureDiagnostics(args: {
+  commandStr: string;
+  parsedProgram: string;
+  parsedArgs: string[];
+  parsedEnv: Record<string, string>;
+  workdir: string;
+  toolchain: EffectiveToolchain;
+  jobCacheEnv: Record<string, string>;
+  jobEnv: Record<string, string>;
+  envSecrets: string[];
+  commandTimeoutMs: number;
+  maxLogBytes: number;
+  stdout: string;
+  stderr: string;
+}): Promise<string> {
+  const diagnostics: string[] = [];
+  const commonEnv = repoCommandEnv(args.toolchain, args.jobCacheEnv, args.jobEnv, args.parsedEnv, {
+    NODE_OPTIONS: "--enable-source-maps --trace-uncaught --trace-warnings",
+  });
+
+  if (isBunTestCommand(args.parsedProgram, args.parsedArgs)) {
+    const files = extractFailedTestFiles(args.stderr, args.stdout);
+    if (files.length > 0) {
+      diagnostics.push(`[runner diagnostic] bun test failed; rerunning ${files.length} failing test file(s) individually to detect full-suite mock/module leakage.`);
+      for (const file of files) {
+        const result = await runSpawn(
+          "bun",
+          ["test", file],
+          commonEnv,
+          args.workdir,
+          Math.min(args.commandTimeoutMs, 180_000),
+          Math.min(args.maxLogBytes, 120_000),
+          () => {},
+          { cleanNodeEnv: true }
+        );
+        diagnostics.push(
+          [
+            `[runner diagnostic] bun test ${file} -> exit ${result.code}${result.timedOut ? " (timeout)" : ""}`,
+            result.stdout ? redactText(result.stdout, args.envSecrets).trim() : "",
+            result.stderr ? redactText(result.stderr, args.envSecrets).trim() : "",
+          ].filter(Boolean).join("\n")
+        );
+      }
+    }
+  }
+
+  if (isNextBuildFailure(args.commandStr, args.stdout, args.stderr)) {
+    diagnostics.push("[runner diagnostic] next build failed; rerunning `next build --debug` with source maps and trace flags to expose the first real module/call-site.");
+    const result = await runSpawn(
+      "bun",
+      ["run", "next", "build", "--debug"],
+      {
+        ...commonEnv,
+        NODE_ENV: "production",
+        NEXT_DEBUG_BUILD: "1",
+        DEBUG: "next:*,turbopack:*",
+      },
+      args.workdir,
+      Math.min(args.commandTimeoutMs, 240_000),
+      Math.min(args.maxLogBytes, 200_000),
+      () => {},
+      { cleanNodeEnv: true }
+    );
+    diagnostics.push(
+      [
+        `[runner diagnostic] bun run next build --debug -> exit ${result.code}${result.timedOut ? " (timeout)" : ""}`,
+        result.stdout ? redactText(result.stdout, args.envSecrets).trim() : "",
+        result.stderr ? redactText(result.stderr, args.envSecrets).trim() : "",
+      ].filter(Boolean).join("\n")
+    );
+  }
+
+  return diagnostics.join("\n\n");
+}
+
 async function runResolutionProbe(
   workdir: string,
   packages: string[],
@@ -613,14 +723,15 @@ async function runJob(jobId: string): Promise<void> {
         result = await runSpawn(
           parsed.program,
           parsed.args,
-          {
-            ...buildToolchainEnv(toolchain.pathPrefix ?? [], { PATH: process.env.PATH }),
-            ...jobCacheEnv,
-            ...jobEnv,
-            ...parsed.env,
-            NEXT_TELEMETRY_DISABLED: "1",
-            ...(commandStr.startsWith("bun run") ? { NODE_OPTIONS: "--enable-source-maps --trace-uncaught" } : {}),
-          } as Record<string, string>,
+          repoCommandEnv(
+            toolchain,
+            jobCacheEnv,
+            jobEnv,
+            parsed.env,
+            commandStr.startsWith("bun run")
+              ? { NODE_OPTIONS: "--enable-source-maps --trace-uncaught" }
+              : {}
+          ),
           workdir,
           cfg.commandTimeoutMs,
           cfg.maxLogBytes,
@@ -643,7 +754,28 @@ async function runJob(jobId: string): Promise<void> {
         : "failed";
 
       const stdoutRed = redactText(result.stdout, envSecrets);
-      const stderrRed = redactText(result.stderr, envSecrets);
+      let stderrRed = redactText(result.stderr, envSecrets);
+
+      if (status === "failed") {
+        const diagnostic = await runFailureDiagnostics({
+          commandStr,
+          parsedProgram: parsed.program,
+          parsedArgs: parsed.args,
+          parsedEnv: parsed.env,
+          workdir,
+          toolchain,
+          jobCacheEnv,
+          jobEnv,
+          envSecrets,
+          commandTimeoutMs: cfg.commandTimeoutMs,
+          maxLogBytes: cfg.maxLogBytes,
+          stdout: result.stdout,
+          stderr: result.stderr,
+        });
+        if (diagnostic) {
+          stderrRed = [stderrRed.trim(), diagnostic].filter(Boolean).join("\n\n");
+        }
+      }
 
       updateCommand(jobId, i, {
         effectiveCommand: commandLine(parsed.program, parsed.args),
