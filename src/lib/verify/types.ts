@@ -77,6 +77,11 @@ export interface ResolutionProbeResult {
     hasDefault?: boolean;
     error?: string;
   };
+  staticNamedImport?: {
+    ok: boolean;
+    tested?: string[];
+    error?: string;
+  };
   error?: string;
 }
 

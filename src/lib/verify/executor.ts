@@ -270,15 +270,17 @@ async function runResolutionProbe(
   envSecrets: string[]
 ): Promise<ResolutionProbeResult[]> {
   if (packages.length === 0) return [];
-  const probeDir = path.join(workdir, ".purr-cache", "probe");
+  const probeDir = path.join(workdir, "node_modules", ".purr-verify-probe");
   await fs.mkdir(probeDir, { recursive: true });
   const probeFile = path.join(probeDir, "resolution-probe.mjs");
   const script = [
     "import { createRequire } from 'node:module';",
     "import fs from 'node:fs';",
     "import path from 'node:path';",
+    "import { spawnSync } from 'node:child_process';",
     "const requireFromWorkspace = createRequire(path.join(process.cwd(), 'package.json'));",
     "const pkgs = JSON.parse(process.argv[2] || '[]');",
+    "const probeDir = path.dirname(new URL(import.meta.url).pathname);",
     "const out = [];",
     "function inferFormat(resolved) {",
     "  if (!resolved) return 'unknown';",
@@ -310,8 +312,18 @@ async function runResolutionProbe(
     "    const mod = await import(name);",
     "    const namedExports = Object.keys(mod).filter((key) => key !== 'default').slice(0, 100);",
     "    row.import = { ok: true, resolved: importResolved, format: inferFormat(importResolved), namedExports, hasDefault: Object.prototype.hasOwnProperty.call(mod, 'default') };",
+    "    const staticNames = namedExports.filter((key) => /^[$A-Z_a-z][$\\w]*$/.test(key)).slice(0, 40);",
+    "    if (staticNames.length > 0) {",
+    "      const staticProbe = path.join(probeDir, `static-${Buffer.from(name).toString('base64url')}.mjs`);",
+    "      fs.writeFileSync(staticProbe, `import { ${staticNames.join(', ')} } from ${JSON.stringify(name)};\\nconsole.log('ok');\\n`);",
+    "      const child = spawnSync(process.execPath, [staticProbe], { cwd: process.cwd(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });",
+    "      row.staticNamedImport = child.status === 0 ? { ok: true, tested: staticNames } : { ok: false, tested: staticNames, error: (child.stderr || child.stdout || `exit ${child.status}`).trim() };",
+    "    } else {",
+    "      row.staticNamedImport = { ok: true, tested: [] };",
+    "    }",
     "  } catch (e) {",
     "    row.import = { ok: false, error: e && e.message ? e.message : String(e) };",
+    "    row.staticNamedImport = { ok: false, error: row.import.error };",
     "  }",
     "  row.ok = Boolean(row.import?.ok || row.require?.ok);",
     "  row.resolved = row.import?.resolved || row.require?.resolved;",
@@ -388,7 +400,9 @@ async function runJob(jobId: string): Promise<void> {
     }
   }, cfg.jobTimeoutMs);
 
-  const workdir = path.join(cfg.workdirBase, `${jobId}-${randomUUID().slice(0, 8)}`);
+  const workspaceName = `${jobId}-${randomUUID().slice(0, 8)}`;
+  const workdir = path.join(cfg.workdirBase, workspaceName);
+  const cacheDir = path.join(cfg.workdirBase, `${workspaceName}-cache`);
 
   try {
     // Validate inputs again (defense in depth).
@@ -443,11 +457,10 @@ async function runJob(jobId: string): Promise<void> {
         ...commandWorkflowRecommendations(job.commands.map((cmd) => cmd.command)),
       ]),
     });
-    const jobCacheDir = path.join(workdir, ".purr-cache");
     const jobCacheEnv: Record<string, string> = {
-      BUN_INSTALL_CACHE_DIR: path.join(jobCacheDir, "bun"),
-      npm_config_cache: path.join(jobCacheDir, "npm"),
-      XDG_CACHE_HOME: path.join(jobCacheDir, "xdg"),
+      BUN_INSTALL_CACHE_DIR: path.join(cacheDir, "bun"),
+      npm_config_cache: path.join(cacheDir, "npm"),
+      XDG_CACHE_HOME: path.join(cacheDir, "xdg"),
     };
 
     // Check cancel before running commands.
@@ -614,6 +627,7 @@ async function runJob(jobId: string): Promise<void> {
     // Always cleanup workspace.
     clearRuntime(jobId);
     await removeDir(workdir);
+    await removeDir(cacheDir);
     const j = getJob(jobId);
     if (j) updateJob(jobId, { cleanupStatus: "done" });
   }

@@ -18,7 +18,7 @@ This runbook verifies the runner-side fix for false-negative build/test failures
   - `toolchain.defaults`
   - `installStrategies`
   - per-command `effectiveCommand`
-  - optional `resolutionProbe` with both CommonJS `require` and ESM `import` paths when available
+  - optional `resolutionProbe` with CommonJS `require`, ESM dynamic `import`, and static named import checks when available
   - `runnerRecommendations`
 - `health_check` and `/api/health` include `toolchainCacheRoot`, `toolchainDefaultNode`, and `toolchainDefaultBun`.
 
@@ -153,5 +153,5 @@ Expected:
 - Caller-provided `PATH`, `NODE_PATH`, and `NODE_OPTIONS` remain blocked.
 - The runner may set its own clean `PATH` and build diagnostics `NODE_OPTIONS`; inherited host values are still stripped.
 - `bunx` is executed as `bun x` internally so downloaded Bun archives do not require a separate `bunx` shim.
-- Package manager caches for job commands are redirected into the per-job workspace (`.purr-cache`) so dependency artifacts are removed with the workspace cleanup.
+- Package manager caches for job commands are redirected to a sibling temp cache outside the cloned repo so `eslint .`, tests, and build tooling never scan runner cache files. The cache is removed with the workspace cleanup.
 - Repos should keep dependencies current in their own lockfile. The runner will not mutate tested repos, but it will surface reproducibility recommendations when package-manager or lockfile metadata is missing or ambiguous.
