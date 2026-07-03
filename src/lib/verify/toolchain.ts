@@ -17,6 +17,11 @@ export interface EffectiveToolchain {
   pathPrefix: string[];
   cacheDir: string;
   warnings: string[];
+  recommendations: string[];
+  defaults: {
+    node?: string;
+    bun?: string;
+  };
 }
 
 export interface InstallStrategy {
@@ -297,21 +302,33 @@ export async function prepareToolchain(workdir: string): Promise<EffectiveToolch
   const cacheDir = path.resolve(process.env.TOOLCHAIN_CACHE_DIR || path.join(os.tmpdir(), "purr-verify-toolchains"));
   const pathPrefix: string[] = [];
   const warnings: string[] = [];
+  const recommendations = await workspaceRecommendations(workdir, declared);
+  const defaultNode = normalizeVersion(process.env.TOOLCHAIN_DEFAULT_NODE || process.env.DEFAULT_NODE_VERSION);
+  const defaultBun = normalizeVersion(process.env.TOOLCHAIN_DEFAULT_BUN || process.env.DEFAULT_BUN_VERSION);
+  const nodeTarget = declared.node ?? defaultNode;
+  const bunTarget = declared.bun ?? defaultBun;
 
-  if (declared.node) {
+  if (!declared.node && defaultNode) {
+    warnings.push(`repo did not declare an exact node version; using runner default ${defaultNode}`);
+  }
+  if (!declared.bun && defaultBun) {
+    warnings.push(`repo did not declare an exact bun version; using runner default ${defaultBun}`);
+  }
+
+  if (nodeTarget) {
     try {
-      const bin = await ensureNode(declared.node, cacheDir, warnings);
+      const bin = await ensureNode(nodeTarget, cacheDir, warnings);
       if (bin) pathPrefix.push(bin);
     } catch (e) {
-      warnings.push(`node ${declared.node} setup failed: ${(e as Error).message}`);
+      warnings.push(`node ${nodeTarget} setup failed: ${(e as Error).message}`);
     }
   }
-  if (declared.bun) {
+  if (bunTarget) {
     try {
-      const bin = await ensureBun(declared.bun, cacheDir, warnings);
+      const bin = await ensureBun(bunTarget, cacheDir, warnings);
       if (bin) pathPrefix.push(bin);
     } catch (e) {
-      warnings.push(`bun ${declared.bun} setup failed: ${(e as Error).message}`);
+      warnings.push(`bun ${bunTarget} setup failed: ${(e as Error).message}`);
     }
   }
 
@@ -319,14 +336,26 @@ export async function prepareToolchain(workdir: string): Promise<EffectiveToolch
   const nodeVersion = (await versionOf("node", ["--version"], env, workdir)) ?? process.version;
   const bunVersion = await versionOf("bun", ["--version"], env, workdir);
 
-  if (declared.node && nodeVersion.replace(/^v/, "") !== declared.node) {
-    warnings.push(`effective node ${nodeVersion} does not match declared ${declared.node}`);
+  if (nodeTarget && nodeVersion.replace(/^v/, "") !== nodeTarget) {
+    warnings.push(`effective node ${nodeVersion} does not match requested ${nodeTarget}`);
   }
-  if (declared.bun && bunVersion !== declared.bun) {
-    warnings.push(`effective bun ${bunVersion ?? "unavailable"} does not match declared ${declared.bun}`);
+  if (bunTarget && bunVersion !== bunTarget) {
+    warnings.push(`effective bun ${bunVersion ?? "unavailable"} does not match requested ${bunTarget}`);
   }
 
-  return { declared, nodeVersion, bunVersion, pathPrefix, cacheDir, warnings };
+  return {
+    declared,
+    nodeVersion,
+    bunVersion,
+    pathPrefix,
+    cacheDir,
+    warnings,
+    recommendations,
+    defaults: {
+      node: defaultNode,
+      bun: defaultBun,
+    },
+  };
 }
 
 export function buildToolchainEnv(
@@ -414,6 +443,52 @@ export async function installStrategy(workdir: string, commandText: string): Pro
     lockfile,
     lockfileHonored: false,
   };
+}
+
+export async function workspaceRecommendations(
+  workdir: string,
+  declared: DeclaredToolchain = { sources: {} }
+): Promise<string[]> {
+  const recommendations: string[] = [];
+  const pkg = await readJsonIfExists(path.join(workdir, "package.json"));
+  const packageManager = typeof pkg?.packageManager === "string" ? pkg.packageManager : "";
+  const lockfiles = [
+    "bun.lock",
+    "bun.lockb",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+  ].filter((file) => existsSync(path.join(workdir, file)));
+
+  if (!declared.node) {
+    recommendations.push("Declare an exact Node version in .nvmrc, .node-version, .tool-versions, package.json volta.node, or package.json engines.node.");
+  }
+  if (!declared.bun && (packageManager.startsWith("bun@") || existsSync(path.join(workdir, "bun.lock")) || existsSync(path.join(workdir, "bun.lockb")))) {
+    recommendations.push("Pin Bun with package.json packageManager (for example bun@1.3.14), .bun-version, .tool-versions, package.json volta.bun, or package.json engines.bun.");
+  }
+  if (!packageManager) {
+    recommendations.push("Add package.json packageManager to make install tooling explicit for live verification.");
+  } else if (!normalizeVersion(packageManager)) {
+    recommendations.push("Pin package.json packageManager to an exact version so agents and the runner use the same install tool.");
+  }
+  if (lockfiles.length === 0) {
+    recommendations.push("Commit a lockfile so live verification can run frozen, reproducible installs.");
+  }
+  if (lockfiles.length > 1) {
+    recommendations.push(`Multiple lockfiles detected (${lockfiles.join(", ")}); keep one package-manager lockfile to avoid dependency graph drift.`);
+  }
+  if (packageManager.startsWith("bun@") && !lockfiles.some((file) => file === "bun.lock" || file === "bun.lockb")) {
+    recommendations.push("packageManager is Bun but no Bun lockfile is committed; run bun install locally and commit bun.lock.");
+  }
+  if (packageManager.startsWith("pnpm@") && !lockfiles.includes("pnpm-lock.yaml")) {
+    recommendations.push("packageManager is pnpm but pnpm-lock.yaml is missing; commit the pnpm lockfile.");
+  }
+  if ((packageManager.startsWith("npm@") || packageManager.startsWith("node@")) && !lockfiles.some((file) => file === "package-lock.json" || file === "npm-shrinkwrap.json")) {
+    recommendations.push("packageManager is npm but package-lock.json/npm-shrinkwrap.json is missing; commit the npm lockfile.");
+  }
+
+  return recommendations;
 }
 
 export function normalizeBunx(program: string, args: string[]): { program: string; args: string[] } {

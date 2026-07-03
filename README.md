@@ -490,6 +490,8 @@ This was the runner environment bug fixed in [PR #1](https://github.com/0xheycat
 
 If workspace isolation is already deployed and the failure is still identical, use the round-2 parity checks in [`docs/RUNNER_TOOLCHAIN_PARITY.md`](docs/RUNNER_TOOLCHAIN_PARITY.md). The runner now reports each job's effective Node/Bun versions, frozen install strategy, and optional package resolution probe output.
 
+For public runners, set global fallbacks like `TOOLCHAIN_DEFAULT_NODE=26.3.0` and `TOOLCHAIN_DEFAULT_BUN=1.3.14` so repos without exact toolchain metadata still run under a predictable baseline. Jobs also emit `runnerRecommendations` when a repo should add `.nvmrc`, `packageManager`, or a lockfile for cleaner live verification.
+
 **A sync call times out but the job seems fine.**
 Heavy jobs exceed the ~60s MCP transport window. Use `mode: "async"` and poll `get_verification_job`.
 

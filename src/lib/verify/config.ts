@@ -48,6 +48,8 @@ export interface VerifyConfig {
   cleanupAfterMs: number;
   dataDir: string;
   toolchainCacheRoot: string;
+  toolchainDefaultNode: string;
+  toolchainDefaultBun: string;
 }
 
 function parseAuthMode(raw: string | undefined): AuthMode {
@@ -128,6 +130,8 @@ export function getConfig(): VerifyConfig {
     cleanupAfterMs: intEnv("CLEANUP_AFTER_MS", 3_600_000),
     dataDir: path.resolve(process.cwd(), dataDir),
     toolchainCacheRoot: path.resolve(strEnv("TOOLCHAIN_CACHE_DIR", path.join(os.tmpdir(), "purr-verify-toolchains"))),
+    toolchainDefaultNode: strEnv("TOOLCHAIN_DEFAULT_NODE", strEnv("DEFAULT_NODE_VERSION", "")),
+    toolchainDefaultBun: strEnv("TOOLCHAIN_DEFAULT_BUN", strEnv("DEFAULT_BUN_VERSION", "")),
   };
 }
 
