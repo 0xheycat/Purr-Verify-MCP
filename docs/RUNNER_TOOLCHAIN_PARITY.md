@@ -89,6 +89,15 @@ Expected:
 - `jobTimeoutMs` is high enough for install + build + full tests, for example `7200000`.
 - `nodeVersion` and `bunVersion` describe the server process only. Per-job effective versions are reported on each job as `toolchain.nodeVersion` and `toolchain.bunVersion`.
 
+## Toolchain Cache Cleanup
+
+Do not prune `toolchainCacheRoot` while verification jobs are active or queued. Long builds may spawn nested Node workers after the top-level command starts; deleting the selected Node/Bun directory mid-command can make otherwise valid builds fail with `spawn .../node ENOENT`.
+
+The runner refreshes the selected toolchain directory timestamp whenever a job uses it. External cleanup jobs should still follow both rules:
+
+- Check `/api/health` first and skip toolchain cleanup unless `activeJobs + queuedJobs == 0`.
+- Use an age threshold on the toolchain install directory itself, not the archive timestamp inside it.
+
 ## Calibration Job
 
 Use async mode for heavy jobs because sync mode can exceed the MCP transport window.
