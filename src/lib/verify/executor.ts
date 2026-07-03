@@ -301,9 +301,24 @@ function repoCommandEnv(
 function extractFailedTestFiles(stderr: string, stdout: string): string[] {
   const text = `${stderr}\n${stdout}`;
   const files = new Set<string>();
-  const re = /(?:^|\n)((?:scripts|src)\/[^\n\r:]+(?:\.test|\.spec)\.[cm]?[jt]sx?):/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(text)) !== null) files.add(match[1]);
+  let currentFile: string | null = null;
+  for (const line of text.split(/\r?\n/)) {
+    const heading = line.match(/^((?:scripts|src)\/[^\n\r:]+(?:\.test|\.spec)\.[cm]?[jt]sx?):$/);
+    if (heading) {
+      currentFile = heading[1];
+      continue;
+    }
+    if (
+      currentFile &&
+      (line.includes("(fail)") ||
+        line.includes("# Unhandled error between tests") ||
+        /^\w*Error:/.test(line) ||
+        /^SyntaxError:/.test(line) ||
+        /^TypeError:/.test(line))
+    ) {
+      files.add(currentFile);
+    }
+  }
   return Array.from(files).slice(0, 8);
 }
 
