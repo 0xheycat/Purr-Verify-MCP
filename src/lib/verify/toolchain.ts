@@ -207,6 +207,15 @@ async function downloadFile(url: string, dest: string): Promise<void> {
   await fs.writeFile(dest, bytes);
 }
 
+async function touchDir(dir: string): Promise<void> {
+  const now = new Date();
+  try {
+    await fs.utimes(dir, now, now);
+  } catch {
+    // Cache freshness is best-effort; a failed touch must not break jobs.
+  }
+}
+
 async function ensureNode(version: string, cacheDir: string, warnings: string[]): Promise<string | null> {
   const current = process.version.replace(/^v/, "");
   if (current === version) return null;
@@ -216,7 +225,10 @@ async function ensureNode(version: string, cacheDir: string, warnings: string[])
   const installDir = path.join(cacheDir, "node", archiveBase);
   const binDir = isWindows ? installDir : path.join(installDir, "bin");
   const nodeBin = isWindows ? path.join(binDir, "node.exe") : path.join(binDir, "node");
-  if (existsSync(nodeBin)) return binDir;
+  if (existsSync(nodeBin)) {
+    await touchDir(installDir);
+    return binDir;
+  }
 
   await fs.mkdir(path.dirname(installDir), { recursive: true });
   const archive = path.join(path.dirname(installDir), `${archiveBase}.${isWindows ? "zip" : "tar.xz"}`);
@@ -235,6 +247,7 @@ async function ensureNode(version: string, cacheDir: string, warnings: string[])
     warnings.push(`node ${version} archive extracted but binary was not found`);
     return null;
   }
+  await touchDir(installDir);
   return binDir;
 }
 
@@ -247,7 +260,10 @@ async function ensureBun(version: string, cacheDir: string, warnings: string[]):
   const installDir = path.join(cacheDir, "bun", `bun-v${version}-${platform}`);
   const binDir = path.join(installDir, archiveBase);
   const bunBin = path.join(binDir, isWindows ? "bun.exe" : "bun");
-  if (existsSync(bunBin)) return binDir;
+  if (existsSync(bunBin)) {
+    await touchDir(installDir);
+    return binDir;
+  }
 
   await fs.mkdir(installDir, { recursive: true });
   const archive = path.join(installDir, `${archiveBase}.zip`);
@@ -267,6 +283,7 @@ async function ensureBun(version: string, cacheDir: string, warnings: string[]):
     warnings.push(`bun ${version} archive extracted but binary was not found`);
     return null;
   }
+  await touchDir(installDir);
   return binDir;
 }
 
