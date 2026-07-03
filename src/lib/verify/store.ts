@@ -236,6 +236,7 @@ export function createJob(input: {
     tags: input.tags ?? [],
     installStrategies: [],
     resolutionProbe: [],
+    runnerRecommendations: [],
   };
   jobs.set(job.jobId, job);
   // githubToken and env live ONLY in memory — they are deliberately NOT on the

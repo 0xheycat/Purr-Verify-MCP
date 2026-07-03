@@ -38,6 +38,11 @@ export interface EffectiveToolchain {
   pathPrefix?: string[];
   cacheDir?: string;
   warnings: string[];
+  recommendations?: string[];
+  defaults?: {
+    node?: string;
+    bun?: string;
+  };
 }
 
 export interface InstallStrategy {
@@ -58,6 +63,20 @@ export interface ResolutionProbeResult {
   ok: boolean;
   resolved?: string;
   format?: "esm" | "cjs" | "unknown";
+  require?: {
+    ok: boolean;
+    resolved?: string;
+    format?: "esm" | "cjs" | "unknown";
+    error?: string;
+  };
+  import?: {
+    ok: boolean;
+    resolved?: string;
+    format?: "esm" | "cjs" | "unknown";
+    namedExports?: string[];
+    hasDefault?: boolean;
+    error?: string;
+  };
   error?: string;
 }
 
@@ -136,6 +155,7 @@ export interface Job {
   toolchain?: EffectiveToolchain;
   installStrategies?: InstallStrategy[];
   resolutionProbe?: ResolutionProbeResult[];
+  runnerRecommendations?: string[];
 }
 
 export interface HealthResponse {
@@ -170,6 +190,8 @@ export interface HealthResponse {
   workspaceRoot?: string;
   /** Cache root for per-job Node/Bun toolchains. */
   toolchainCacheRoot?: string;
+  toolchainDefaultNode?: string | null;
+  toolchainDefaultBun?: string | null;
 }
 
 // A share token grants public read-only access to a single job's result.

@@ -61,6 +61,22 @@ function buildCloneUrl(repo: string, runtimeToken?: string): string {
   return `https://github.com/${repo}.git`;
 }
 
+function killChildTree(child: ChildProcess, signal: NodeJS.Signals): void {
+  try {
+    if (process.platform !== "win32" && child.pid) {
+      process.kill(-child.pid, signal);
+      return;
+    }
+  } catch {
+    // Fall back to killing the direct child below.
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    // ignore
+  }
+}
+
 // Run a single program (no shell) with stdout/stderr capture + redaction.
 //
 // `opts.cleanNodeEnv` (used for the repo's OWN commands: bun install / bun test
@@ -89,6 +105,7 @@ function runSpawn(
       env: { ...baseEnv, ...env },
       stdio: ["ignore", "pipe", "pipe"],
       shell: false,
+      detached: process.platform !== "win32",
     });
     onChild(child);
 
@@ -109,11 +126,8 @@ function runSpawn(
 
     const timer = setTimeout(() => {
       timedOut = true;
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // ignore
-      }
+      killChildTree(child, "SIGTERM");
+      setTimeout(() => killChildTree(child, "SIGKILL"), 3000).unref?.();
     }, timeoutMs);
 
     child.stdout?.on("data", (chunk: Buffer) => {
@@ -217,6 +231,8 @@ function publicToolchain(toolchain: EffectiveToolchain): EffectiveToolchain {
     nodeVersion: toolchain.nodeVersion,
     bunVersion: toolchain.bunVersion,
     warnings: toolchain.warnings,
+    recommendations: toolchain.recommendations,
+    defaults: toolchain.defaults,
   };
 }
 
@@ -232,40 +248,62 @@ async function runResolutionProbe(
   envSecrets: string[]
 ): Promise<ResolutionProbeResult[]> {
   if (packages.length === 0) return [];
+  const probeDir = path.join(workdir, ".purr-cache", "probe");
+  await fs.mkdir(probeDir, { recursive: true });
+  const probeFile = path.join(probeDir, "resolution-probe.mjs");
   const script = [
-    "const { createRequire } = require('node:module');",
-    "const fs = require('node:fs');",
-    "const requireFromWorkspace = createRequire(process.cwd() + '/package.json');",
-    "const pkgs = JSON.parse(process.argv[1]);",
+    "import { createRequire } from 'node:module';",
+    "import fs from 'node:fs';",
+    "import path from 'node:path';",
+    "const requireFromWorkspace = createRequire(path.join(process.cwd(), 'package.json'));",
+    "const pkgs = JSON.parse(process.argv[2] || '[]');",
     "const out = [];",
-    "for (const name of pkgs) {",
-    "  try {",
-    "    const resolved = requireFromWorkspace.resolve(name);",
-    "    let format = 'unknown';",
-    "    if (/\\.mjs$/i.test(resolved)) format = 'esm';",
-    "    else if (/\\.cjs$/i.test(resolved)) format = 'cjs';",
-    "    else if (/\\.js$/i.test(resolved)) {",
-    "      let dir = resolved;",
-    "      while (dir && dir !== require('node:path').dirname(dir)) {",
-    "        dir = require('node:path').dirname(dir);",
-    "        const pkg = require('node:path').join(dir, 'package.json');",
-    "        if (fs.existsSync(pkg)) {",
-    "          try { format = JSON.parse(fs.readFileSync(pkg, 'utf8')).type === 'module' ? 'esm' : 'cjs'; } catch {}",
-    "          break;",
-    "        }",
+    "function inferFormat(resolved) {",
+    "  if (!resolved) return 'unknown';",
+    "  if (/\\.mjs$/i.test(resolved)) return 'esm';",
+    "  if (/\\.cjs$/i.test(resolved)) return 'cjs';",
+    "  if (/\\.js$/i.test(resolved)) {",
+    "    let dir = resolved;",
+    "    while (dir && dir !== path.dirname(dir)) {",
+    "      dir = path.dirname(dir);",
+    "      const pkg = path.join(dir, 'package.json');",
+    "      if (fs.existsSync(pkg)) {",
+    "        try { return JSON.parse(fs.readFileSync(pkg, 'utf8')).type === 'module' ? 'esm' : 'cjs'; } catch {}",
+    "        break;",
     "      }",
     "    }",
-    "    out.push({ packageName: name, ok: true, resolved, format });",
-    "  } catch (e) {",
-    "    out.push({ packageName: name, ok: false, error: e && e.message ? e.message : String(e) });",
     "  }",
+    "  return 'unknown';",
+    "}",
+    "for (const name of pkgs) {",
+    "  const row = { packageName: name, ok: false };",
+    "  try {",
+    "    const requireResolved = requireFromWorkspace.resolve(name);",
+    "    row.require = { ok: true, resolved: requireResolved, format: inferFormat(requireResolved) };",
+    "  } catch (e) {",
+    "    row.require = { ok: false, error: e && e.message ? e.message : String(e) };",
+    "  }",
+    "  try {",
+    "    const importResolved = await import.meta.resolve(name);",
+    "    const mod = await import(name);",
+    "    const namedExports = Object.keys(mod).filter((key) => key !== 'default').slice(0, 100);",
+    "    row.import = { ok: true, resolved: importResolved, format: inferFormat(importResolved), namedExports, hasDefault: Object.prototype.hasOwnProperty.call(mod, 'default') };",
+    "  } catch (e) {",
+    "    row.import = { ok: false, error: e && e.message ? e.message : String(e) };",
+    "  }",
+    "  row.ok = Boolean(row.import?.ok || row.require?.ok);",
+    "  row.resolved = row.import?.resolved || row.require?.resolved;",
+    "  row.format = row.import?.format || row.require?.format || 'unknown';",
+    "  if (!row.ok) row.error = row.import?.error || row.require?.error || 'resolution failed';",
+    "  out.push(row);",
     "}",
     "process.stdout.write(JSON.stringify(out));",
   ].join("\n");
+  await fs.writeFile(probeFile, script, "utf8");
 
   const result = await runSpawn(
-    "node",
-    ["-e", script, JSON.stringify(packages)],
+    "bun",
+    [probeFile, JSON.stringify(packages)],
     {
       ...buildToolchainEnv(toolchain.pathPrefix ?? [], { PATH: process.env.PATH }),
       ...jobEnv,
@@ -317,11 +355,10 @@ async function runJob(jobId: string): Promise<void> {
   rt.jobTimer = setTimeout(() => {
     const cur = getRuntime(jobId);
     if (cur?.currentChild) {
-      try {
-        cur.currentChild.kill("SIGKILL");
-      } catch {
-        // ignore
-      }
+      killChildTree(cur.currentChild, "SIGTERM");
+      setTimeout(() => {
+        if (cur.currentChild) killChildTree(cur.currentChild, "SIGKILL");
+      }, 3000).unref?.();
     }
     const j = getJob(jobId);
     if (j && (j.status === "running")) {
@@ -377,7 +414,10 @@ async function runJob(jobId: string): Promise<void> {
 
     const toolchain = await prepareToolchain(workdir);
     const toolchainPublic = publicToolchain(toolchain);
-    updateJob(jobId, { toolchain: toolchainPublic });
+    updateJob(jobId, {
+      toolchain: toolchainPublic,
+      runnerRecommendations: toolchain.recommendations,
+    });
     const jobCacheDir = path.join(workdir, ".purr-cache");
     const jobCacheEnv: Record<string, string> = {
       BUN_INSTALL_CACHE_DIR: path.join(jobCacheDir, "bun"),
@@ -940,11 +980,10 @@ export function requestCancel(jobId: string): boolean {
   if (rt) {
     rt.cancelRequested = true;
     if (rt.currentChild) {
-      try {
-        rt.currentChild.kill("SIGTERM");
-      } catch {
-        // ignore
-      }
+      killChildTree(rt.currentChild, "SIGTERM");
+      setTimeout(() => {
+        if (rt.currentChild) killChildTree(rt.currentChild, "SIGKILL");
+      }, 3000).unref?.();
     }
   }
   if (job.status === "queued") {

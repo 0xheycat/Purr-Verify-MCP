@@ -34,6 +34,8 @@ export async function GET() {
     bunVersion: (process.versions as unknown as { bun?: string }).bun ?? null,
     workspaceRoot: cfg.workdirBase,
     toolchainCacheRoot: cfg.toolchainCacheRoot,
+    toolchainDefaultNode: cfg.toolchainDefaultNode || null,
+    toolchainDefaultBun: cfg.toolchainDefaultBun || null,
   };
   return NextResponse.json(body);
 }
