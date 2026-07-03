@@ -39,6 +39,8 @@ const PATTERNS: Pattern[] = [
   { name: "bunx prisma generate", re: new RegExp(`^bunx prisma generate$`) },
   { name: "bun run <script>", re: new RegExp(`^bun run ${SCRIPT}$`) },
   { name: "bun test", re: new RegExp(`^bun test$`) },
+  { name: "bun test --isolate", re: new RegExp(`^bun test --isolate$`) },
+  { name: "bun test --parallel=<n>", re: new RegExp(`^bun test --parallel=${NUM}$`) },
   { name: "bun test <path>", re: new RegExp(`^bun test ${REL_PATH}$`) },
   { name: "npm ci", re: new RegExp(`^npm ci$`) },
   { name: "npm run <script>", re: new RegExp(`^npm run ${SCRIPT}$`) },

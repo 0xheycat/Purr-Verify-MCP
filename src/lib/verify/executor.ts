@@ -259,11 +259,23 @@ function commandLine(program: string, args: string[]): string {
   return [program, ...args].join(" ");
 }
 
+function normalizeTestCommand(program: string, args: string[]): { program: string; args: string[] } {
+  if (program === "bun" && args.length === 1 && args[0] === "test") {
+    return { program, args: ["test", "--isolate"] };
+  }
+  return { program, args };
+}
+
 function commandWorkflowRecommendations(commands: string[]): string[] {
   const recommendations: string[] = [];
   if (commands.includes("bun run ci:check")) {
     recommendations.push(
       "For long Next.js repos, prefer split commands (`bun run typecheck`, `bun run lint`, `bun run build`) instead of one `bun run ci:check` so agents get isolated logs, clearer failures, and less wasted rerun time."
+    );
+  }
+  if (commands.includes("bun test")) {
+    recommendations.push(
+      "Bare `bun test` is executed as `bun test --isolate` by default so test-file globals and module mocks cannot leak across the full suite."
     );
   }
   return recommendations;
@@ -704,6 +716,9 @@ async function runJob(jobId: string): Promise<void> {
         program: normalized.program,
         args: normalized.args,
       };
+      const isolatedTest = normalizeTestCommand(parsed.program, parsed.args);
+      parsed.program = isolatedTest.program;
+      parsed.args = isolatedTest.args;
       let result: {
         code: number | null;
         stdout: string;
@@ -742,10 +757,7 @@ async function runJob(jobId: string): Promise<void> {
             toolchain,
             jobCacheEnv,
             jobEnv,
-            parsed.env,
-            commandStr.startsWith("bun run")
-              ? { NODE_OPTIONS: "--enable-source-maps --trace-uncaught" }
-              : {}
+            parsed.env
           ),
           workdir,
           cfg.commandTimeoutMs,
