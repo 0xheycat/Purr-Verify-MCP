@@ -15,6 +15,7 @@ import type { Job, JobStatus, ResolutionProbeModuleRequest } from "./types";
 // Internal runtime tracking (not serialized).
 interface RuntimeState {
   currentChild?: ChildProcess | null;
+  backgroundChildren?: ChildProcess[];
   jobTimer?: NodeJS.Timeout | null;
   cancelRequested?: boolean;
   /**
@@ -206,6 +207,7 @@ export function createJob(input: {
   env?: Record<string, string>;
   resolutionProbePackages?: string[];
   resolutionProbeModules?: ResolutionProbeModuleRequest[];
+  timeoutPolicy?: Job["timeoutPolicy"];
 }): Job {
   const now = new Date().toISOString();
   const job: Job = {
@@ -239,12 +241,14 @@ export function createJob(input: {
     installStrategies: [],
     resolutionProbe: [],
     runnerRecommendations: [],
+    timeoutPolicy: input.timeoutPolicy,
   };
   jobs.set(job.jobId, job);
   // githubToken and env live ONLY in memory — they are deliberately NOT on the
   // Job object, so persist(job) below can never write them to disk.
   runtime.set(job.jobId, {
     currentChild: null,
+    backgroundChildren: [],
     jobTimer: null,
     cancelRequested: false,
     githubToken: input.githubToken ?? null,
@@ -356,6 +360,22 @@ export function clearRuntime(jobId: string): void {
     rt.jobTimer = null;
   }
   rt.currentChild = null;
+  for (const child of rt.backgroundChildren ?? []) {
+    try {
+      if (process.platform !== "win32" && child.pid) {
+        process.kill(-child.pid, "SIGTERM");
+      } else {
+        child.kill("SIGTERM");
+      }
+    } catch {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // ignore
+      }
+    }
+  }
+  rt.backgroundChildren = [];
   // Drop the transient GitHub token so it isn't held in memory after the job
   // finishes. (The token was only needed for cloning, which is done by now.)
   if (rt) rt.githubToken = null;

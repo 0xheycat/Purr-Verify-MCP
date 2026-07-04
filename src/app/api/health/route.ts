@@ -2,7 +2,7 @@
 // Returns service health and active/queued/total job counts.
 
 import { NextResponse } from "next/server";
-import { VERSION, getConfig, isConfigured, githubTokenSource } from "@/lib/verify/config";
+import { MAX_LONG_RUN_TIMEOUT_MS, VERSION, getConfig, isConfigured, githubTokenSource } from "@/lib/verify/config";
 import { activeJobCount, queuedJobCount, totalJobCount, loadPersisted } from "@/lib/verify/store";
 import { ensureScheduler } from "@/lib/verify/executor";
 import type { HealthResponse } from "@/lib/verify/types";
@@ -38,6 +38,7 @@ export async function GET() {
     toolchainDefaultBun: cfg.toolchainDefaultBun || null,
     commandTimeoutMs: cfg.commandTimeoutMs,
     jobTimeoutMs: cfg.jobTimeoutMs,
+    maxLongRunTimeoutMs: MAX_LONG_RUN_TIMEOUT_MS,
   };
   return NextResponse.json(body);
 }

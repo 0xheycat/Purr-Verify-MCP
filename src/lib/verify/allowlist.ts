@@ -18,6 +18,8 @@ const SCRIPT = "[a-zA-Z0-9_.:-]+"; // npm/bun script names: build, ci:check
 const SAFE_FILE = "[a-zA-Z0-9_.-]+"; // a single filename (no slashes)
 const NUM = "[0-9]+";
 const WORD = "[a-z0-9_-]+";
+const SAFE_ARG_VALUE = "[A-Za-z0-9_.:@=+,-]+";
+const B64URL = "[A-Za-z0-9_-]+={0,2}";
 
 // A safe relative path: segments of [A-Za-z0-9_.-] joined by "/", must not
 // start with "/", and ".." is forbidden globally (checked separately).
@@ -27,6 +29,9 @@ const REL_PATH = `${SEG}(?:/${SEG})*`;
 // Safe flags for the ENV_MODE=mock manage script.
 const SAFE_FLAG = `(?:--(?:duration|poll-interval|manage-interval|heartbeat-interval|iterations|interval)=${NUM}|--mode=${WORD}|--execute=false)`;
 const SAFE_FLAGS = `${SAFE_FLAG}(?:\\s+${SAFE_FLAG})*`;
+const SCRIPT_TS = `scripts/${SEG}(?:/${SEG})*\\.ts`;
+const SCRIPT_ARG = `--[A-Za-z0-9_-]+=${SAFE_ARG_VALUE}`;
+const SCRIPT_ARGS = `${SCRIPT_ARG}(?:\\s+${SCRIPT_ARG})*`;
 
 interface Pattern {
   name: string;
@@ -48,6 +53,13 @@ const PATTERNS: Pattern[] = [
   { name: "pnpm run <script>", re: new RegExp(`^pnpm run ${SCRIPT}$`) },
   { name: "npx prisma generate", re: new RegExp(`^npx prisma generate$`) },
   { name: "node <path>", re: new RegExp(`^node ${REL_PATH}$`) },
+  { name: "git clone https://github.com/txtx/surfpool.git", re: /^git clone https:\/\/github\.com\/txtx\/surfpool\.git$/ },
+  { name: "cargo surfpool-install", re: /^cargo surfpool-install$/ },
+  { name: "rustup-init -y", re: /^rustup-init -y$/ },
+  { name: "surfpool start", re: /^surfpool start$/ },
+  { name: "curl loopback RPC POST --data-base64 <base64url-json>", re: new RegExp(`^curl -s http://(?:127\\.0\\.0\\.1|localhost):8899 -X POST --data-base64 ${B64URL}$`) },
+  { name: "bun run scripts/<script>.ts <safe --key=value args>", re: new RegExp(`^bun run ${SCRIPT_TS}(?:\\s+${SCRIPT_ARGS})?$`) },
+  { name: "sleep <seconds>", re: new RegExp(`^sleep ${NUM}$`) },
   { name: "cat reports/<file>.json", re: new RegExp(`^cat reports/${SAFE_FILE}\\.json$`) },
   { name: "cat reports/<file>.txt", re: new RegExp(`^cat reports/${SAFE_FILE}\\.txt$`) },
   {
@@ -70,7 +82,6 @@ const FORBIDDEN_SUBSTRINGS = [
   "\\",
   '"',
   "'",
-  "curl",
   "wget",
   "rm ",
   "rm\t",
@@ -98,6 +109,22 @@ function containsForbidden(cmd: string): string | null {
   return null;
 }
 
+function validateLoopbackCurlPayload(cmd: string): string | null {
+  const match = cmd.match(/^curl -s http:\/\/(?:127\.0\.0\.1|localhost):8899 -X POST --data-base64 ([A-Za-z0-9_-]+={0,2})$/);
+  if (!match) return null;
+  try {
+    const json = Buffer.from(match[1], "base64url").toString("utf8");
+    if (json.length > 8192) return "curl JSON payload too large";
+    const parsed = JSON.parse(json) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return "curl JSON payload must decode to an object";
+    }
+    return null;
+  } catch {
+    return "curl JSON payload must be valid base64url-encoded JSON";
+  }
+}
+
 export function validateCommand(cmd: string): ValidationResult {
   if (typeof cmd !== "string") return { ok: false, reason: "command must be a string" };
   const trimmed = cmd.trim();
@@ -108,6 +135,13 @@ export function validateCommand(cmd: string): ValidationResult {
   if (forbidden) {
     return { ok: false, reason: `command contains forbidden token: ${forbidden}` };
   }
+
+  const sleep = trimmed.match(/^sleep ([0-9]+)$/);
+  if (sleep && Number(sleep[1]) > 32_400) {
+    return { ok: false, reason: "sleep duration exceeds 32400 seconds" };
+  }
+  const curlPayloadError = validateLoopbackCurlPayload(trimmed);
+  if (curlPayloadError) return { ok: false, reason: curlPayloadError };
 
   for (const p of PATTERNS) {
     if (p.re.test(trimmed)) {

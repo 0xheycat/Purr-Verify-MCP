@@ -93,7 +93,11 @@ function runSpawn(
   timeoutMs: number,
   maxBytes: number,
   onChild: (child: ChildProcess) => void,
-  opts?: { cleanNodeEnv?: boolean }
+  opts?: {
+    cleanNodeEnv?: boolean;
+    onStdout?: (stdout: string, truncated: boolean) => void;
+    onStderr?: (stderr: string, truncated: boolean) => void;
+  }
 ): Promise<{ code: number | null; stdout: string; stderr: string; truncated: boolean; timedOut: boolean }> {
   return new Promise((resolve) => {
     const baseEnv: Record<string, string | undefined> = opts?.cleanNodeEnv
@@ -161,6 +165,7 @@ function runSpawn(
         stdout += s;
         stdoutLen += s.length;
       }
+      opts?.onStdout?.(stdout, truncated);
     });
 
     child.stderr?.on("data", (chunk: Buffer) => {
@@ -178,6 +183,7 @@ function runSpawn(
         stderr += s;
         stderrLen += s.length;
       }
+      opts?.onStderr?.(stderr, truncated);
     });
 
     child.on("error", (err) => {
@@ -188,6 +194,110 @@ function runSpawn(
     child.on("close", (code) => {
       finish(code);
     });
+  });
+}
+
+function runBackgroundSpawn(
+  program: string,
+  args: string[],
+  env: Record<string, string>,
+  cwd: string,
+  maxBytes: number,
+  onChild: (child: ChildProcess) => void,
+  opts?: {
+    cleanNodeEnv?: boolean;
+    onStdout?: (stdout: string, truncated: boolean) => void;
+    onStderr?: (stderr: string, truncated: boolean) => void;
+  }
+): Promise<{ code: number | null; stdout: string; stderr: string; truncated: boolean; timedOut: boolean }> {
+  return new Promise((resolve) => {
+    const baseEnv: Record<string, string | undefined> = opts?.cleanNodeEnv
+      ? {
+          HOME: process.env.HOME,
+          USER: process.env.USER,
+          LOGNAME: process.env.LOGNAME,
+          SHELL: process.env.SHELL,
+          LANG: process.env.LANG,
+          LC_ALL: process.env.LC_ALL,
+          TMPDIR: process.env.TMPDIR,
+          TEMP: process.env.TEMP,
+          TMP: process.env.TMP,
+          PATH: process.env.PATH,
+          PWD: cwd,
+        }
+      : { ...process.env };
+    if (opts?.cleanNodeEnv) {
+      delete baseEnv.NODE_PATH;
+      delete baseEnv.NODE_OPTIONS;
+      delete baseEnv.NODE_ENV;
+    }
+    const child = spawn(program, args, {
+      cwd,
+      env: { ...baseEnv, ...env } as NodeJS.ProcessEnv,
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: false,
+      detached: process.platform !== "win32",
+    });
+    onChild(child);
+
+    let stdout = "";
+    let stderr = "";
+    let stdoutLen = 0;
+    let stderrLen = 0;
+    let truncated = false;
+    let resolved = false;
+
+    const finish = (code: number | null) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(readyTimer);
+      resolve({ code, stdout, stderr, truncated, timedOut: false });
+    };
+
+    const append = (kind: "stdout" | "stderr", chunk: Buffer) => {
+      const s = chunk.toString("utf8");
+      if (kind === "stdout") {
+        const remaining = maxBytes - stdoutLen;
+        if (remaining <= 0) {
+          truncated = true;
+        } else if (s.length > remaining) {
+          stdout += s.slice(0, remaining);
+          stdoutLen = maxBytes;
+          truncated = true;
+        } else {
+          stdout += s;
+          stdoutLen += s.length;
+        }
+        opts?.onStdout?.(stdout, truncated);
+      } else {
+        const remaining = maxBytes - stderrLen;
+        if (remaining <= 0) {
+          truncated = true;
+        } else if (s.length > remaining) {
+          stderr += s.slice(0, remaining);
+          stderrLen = maxBytes;
+          truncated = true;
+        } else {
+          stderr += s;
+          stderrLen += s.length;
+        }
+        opts?.onStderr?.(stderr, truncated);
+      }
+    };
+
+    child.stdout?.on("data", (chunk: Buffer) => append("stdout", chunk));
+    child.stderr?.on("data", (chunk: Buffer) => append("stderr", chunk));
+    child.on("error", (err) => {
+      stderr += `\n[executor] failed to spawn background process: ${err.message}`;
+      finish(127);
+    });
+    child.on("exit", (code) => {
+      if (!resolved) finish(code ?? 1);
+    });
+
+    const readyTimer = setTimeout(() => {
+      finish(0);
+    }, 5000);
   });
 }
 
@@ -609,6 +719,12 @@ async function runJob(jobId: string): Promise<void> {
 
   const startedAt = nowIso();
   const startMs = Date.now();
+  const timeoutPolicy = job.timeoutPolicy ?? {
+    longRun: false,
+    commandTimeoutMs: cfg.commandTimeoutMs,
+    jobTimeoutMs: cfg.jobTimeoutMs,
+    maxLongRunTimeoutMs: 9 * 60 * 60 * 1000,
+  };
   updateJob(jobId, { status: "running", startedAt });
 
   // Job-level timeout.
@@ -622,9 +738,9 @@ async function runJob(jobId: string): Promise<void> {
     }
     const j = getJob(jobId);
     if (j && (j.status === "running")) {
-      finalize(jobId, "timeout", "Job exceeded JOB_TIMEOUT_MS");
+      finalize(jobId, "timeout", `Job exceeded timeout (${timeoutPolicy.jobTimeoutMs} ms)`);
     }
-  }, cfg.jobTimeoutMs);
+  }, timeoutPolicy.jobTimeoutMs);
 
   const workspaceName = `${jobId}-${randomUUID().slice(0, 8)}`;
   const workdir = path.join(cfg.workdirBase, workspaceName);
@@ -761,6 +877,39 @@ async function runJob(jobId: string): Promise<void> {
         } catch (e) {
           result = { code: 1, stdout: "", stderr: `Failed to read ${parsed.readFile}: ${(e as Error).message}`, truncated: false, timedOut: false };
         }
+      } else if (parsed.program === "surfpool" && parsed.args.length === 1 && parsed.args[0] === "start") {
+        result = await runBackgroundSpawn(
+          parsed.program,
+          parsed.args,
+          repoCommandEnv(
+            toolchain,
+            jobCacheEnv,
+            jobEnv,
+            parsed.env
+          ),
+          workdir,
+          cfg.maxLogBytes,
+          (child) => {
+            const rt3 = getRuntime(jobId);
+            if (rt3) {
+              rt3.currentChild = child;
+              rt3.backgroundChildren = [...(rt3.backgroundChildren ?? []), child];
+            }
+          },
+          {
+            cleanNodeEnv: true,
+            onStdout: (stdout, truncated) => updateCommand(jobId, i, { stdout: redactText(stdout, envSecrets), truncated }),
+            onStderr: (stderr, truncated) => updateCommand(jobId, i, { stderr: redactText(stderr, envSecrets), truncated }),
+          }
+        );
+        const rt3 = getRuntime(jobId);
+        if (rt3) rt3.currentChild = null;
+        if (result.code === 0) {
+          result.stdout = [
+            "[runner] background process started: surfpool start",
+            result.stdout.trim(),
+          ].filter(Boolean).join("\n");
+        }
       } else {
         // Merge job-level env with any inline ENV=VALUE prefix parsed from the
         // command (inline values win). cleanNodeEnv ensures module resolution
@@ -775,13 +924,17 @@ async function runJob(jobId: string): Promise<void> {
             parsed.env
           ),
           workdir,
-          cfg.commandTimeoutMs,
+          timeoutPolicy.commandTimeoutMs,
           cfg.maxLogBytes,
           (child) => {
             const rt3 = getRuntime(jobId);
             if (rt3) rt3.currentChild = child;
           },
-          { cleanNodeEnv: true }
+          {
+            cleanNodeEnv: true,
+            onStdout: (stdout, truncated) => updateCommand(jobId, i, { stdout: redactText(stdout, envSecrets), truncated }),
+            onStderr: (stderr, truncated) => updateCommand(jobId, i, { stderr: redactText(stderr, envSecrets), truncated }),
+          }
         );
         const rt3 = getRuntime(jobId);
         if (rt3) rt3.currentChild = null;
@@ -809,7 +962,7 @@ async function runJob(jobId: string): Promise<void> {
           jobCacheEnv,
           jobEnv,
           envSecrets,
-          commandTimeoutMs: cfg.commandTimeoutMs,
+          commandTimeoutMs: timeoutPolicy.commandTimeoutMs,
           maxLogBytes: cfg.maxLogBytes,
           stdout: result.stdout,
           stderr: result.stderr,
@@ -1191,6 +1344,8 @@ export interface CreateJobInput {
    */
   env?: Record<string, string>;
   resolutionProbePackages?: string[];
+  resolutionProbeModules?: ResolutionProbeModuleRequest[];
+  timeoutPolicy?: Job["timeoutPolicy"];
 }
 
 export async function enqueueJob(input: CreateJobInput): Promise<Job> {

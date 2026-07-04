@@ -70,6 +70,7 @@ export async function POST(req: NextRequest) {
     env: validation.env,
     resolutionProbePackages: validation.resolutionProbePackages,
     resolutionProbeModules: validation.resolutionProbeModules,
+    timeoutPolicy: validation.timeoutPolicy,
   };
 
   if (effectiveMode === "sync") {

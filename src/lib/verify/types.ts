@@ -136,6 +136,16 @@ export interface VerifyRequest {
   resolution_probe?: string[] | ResolutionProbeRequest;
   /** Execution mode: "async" (default, returns 202 immediately) or "sync" (runs inline, returns final result). */
   mode?: "sync" | "async";
+  /**
+   * Opt-in long-running verification mode for fork/soak jobs. Defaults keep
+   * normal CI bounded; long_run permits per-job timeout overrides up to the
+   * server-side cap.
+   */
+  long_run?: boolean;
+  /** Optional per-job command timeout override in milliseconds, long_run only. */
+  command_timeout_ms?: number;
+  /** Optional per-job total timeout override in milliseconds, long_run only. */
+  job_timeout_ms?: number;
 }
 
 export interface WebhookDelivery {
@@ -180,6 +190,12 @@ export interface Job {
   installStrategies?: InstallStrategy[];
   resolutionProbe?: ResolutionProbeResult[];
   runnerRecommendations?: string[];
+  timeoutPolicy?: {
+    longRun: boolean;
+    commandTimeoutMs: number;
+    jobTimeoutMs: number;
+    maxLongRunTimeoutMs: number;
+  };
 }
 
 export interface HealthResponse {
@@ -218,6 +234,7 @@ export interface HealthResponse {
   toolchainDefaultBun?: string | null;
   commandTimeoutMs?: number;
   jobTimeoutMs?: number;
+  maxLongRunTimeoutMs?: number;
 }
 
 // A share token grants public read-only access to a single job's result.

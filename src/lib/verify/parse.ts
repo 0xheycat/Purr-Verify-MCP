@@ -36,5 +36,25 @@ export function parseCommand(cmd: string): ParsedCommand {
     return { program, args, env, readFile: args[0] };
   }
 
+  // Special-case loopback JSON-RPC curl. The allowlist accepts a base64url
+  // JSON token instead of shell-quoted JSON so callers cannot smuggle shell
+  // syntax and `spawn(..., shell:false)` still receives the real JSON body.
+  if (
+    program === "curl" &&
+    args.length === 6 &&
+    args[0] === "-s" &&
+    /^http:\/\/(?:127\.0\.0\.1|localhost):8899$/.test(args[1]) &&
+    args[2] === "-X" &&
+    args[3] === "POST" &&
+    args[4] === "--data-base64"
+  ) {
+    const body = Buffer.from(args[5], "base64url").toString("utf8");
+    return {
+      program,
+      args: ["-s", args[1], "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", body],
+      env,
+    };
+  }
+
   return { program, args, env };
 }

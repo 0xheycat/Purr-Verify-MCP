@@ -10,7 +10,7 @@
 //   - health_check
 
 import { NextRequest, NextResponse } from "next/server";
-import { VERSION, getConfig, isConfigured, isRepoAllowed, isValidHead, isValidRef, githubTokenSource } from "./config";
+import { MAX_LONG_RUN_TIMEOUT_MS, VERSION, getConfig, isConfigured, isRepoAllowed, isValidHead, isValidRef, githubTokenSource } from "./config";
 import { checkAuth, unauthorized } from "./auth";
 import { validateCommands, listPatterns } from "./allowlist";
 import { enqueueJob, requestCancel, runJobSync } from "./executor";
@@ -69,6 +69,19 @@ const TOOLS: ToolDef[] = [
           enum: ["sync", "async"],
           default: "async",
           description: "Execution mode: 'async' (default) queues the job and returns immediately with a jobId; 'sync' runs the job inline and returns the full final result. Sync mode blocks until the job completes (subject to JOB_TIMEOUT_MS).",
+        },
+        long_run: {
+          type: "boolean",
+          default: false,
+          description: "Opt-in long-running mode for fork/soak jobs. Enables command_timeout_ms/job_timeout_ms overrides up to the server-side cap; normal CI defaults stay unchanged.",
+        },
+        command_timeout_ms: {
+          type: "number",
+          description: "Optional per-command timeout override in milliseconds. Requires long_run=true. Maximum is reported by health_check.",
+        },
+        job_timeout_ms: {
+          type: "number",
+          description: "Optional total job timeout override in milliseconds. Requires long_run=true. Maximum is reported by health_check.",
         },
         env: {
           type: "object",
@@ -278,6 +291,7 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
               toolchainDefaultBun: cfg.toolchainDefaultBun || null,
               commandTimeoutMs: cfg.commandTimeoutMs,
               jobTimeoutMs: cfg.jobTimeoutMs,
+              maxLongRunTimeoutMs: MAX_LONG_RUN_TIMEOUT_MS,
             };
             return rpcResult(rid, { content: [toText(health)], isError: false });
           }
@@ -333,6 +347,7 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
               env: validation.env,
               resolutionProbePackages: validation.resolutionProbePackages,
               resolutionProbeModules: validation.resolutionProbeModules,
+              timeoutPolicy: validation.timeoutPolicy,
             };
 
             // Determine execution mode. Default is "async".
@@ -479,6 +494,7 @@ export function validateCreateInput(input: VerifyRequest): {
   env?: Record<string, string>;
   resolutionProbePackages?: string[];
   resolutionProbeModules?: ResolutionProbeModuleRequest[];
+  timeoutPolicy?: Job["timeoutPolicy"];
 } {
   if (!input || typeof input !== "object") return { ok: false, reason: "invalid body" };
   if (!input.repo || typeof input.repo !== "string")
@@ -498,6 +514,8 @@ export function validateCreateInput(input: VerifyRequest): {
   if (!ev.ok) return { ok: false, reason: ev.reason };
   const rp = validateResolutionProbe(input.resolution_probe);
   if (!rp.ok) return { ok: false, reason: rp.reason };
+  const timeoutPolicy = validateTimeoutPolicy(input);
+  if (!timeoutPolicy.ok) return { ok: false, reason: timeoutPolicy.reason };
   return {
     ok: true,
     commands: cv.commands,
@@ -505,6 +523,48 @@ export function validateCreateInput(input: VerifyRequest): {
     env: ev.env,
     resolutionProbePackages: rp.packages,
     resolutionProbeModules: rp.modules,
+    timeoutPolicy: timeoutPolicy.policy,
+  };
+}
+
+export function validateTimeoutPolicy(input: VerifyRequest): {
+  ok: boolean;
+  reason?: string;
+  policy: Job["timeoutPolicy"];
+} {
+  const cfg = getConfig();
+  const longRun = input.long_run === true;
+  const hasCommandOverride = input.command_timeout_ms !== undefined;
+  const hasJobOverride = input.job_timeout_ms !== undefined;
+  if (!longRun && (hasCommandOverride || hasJobOverride)) {
+    return { ok: false, reason: "timeout overrides require long_run=true", policy: undefined };
+  }
+  const parse = (name: string, value: unknown, fallback: number): { ok: boolean; value: number; reason?: string } => {
+    if (value === undefined) return { ok: true, value: fallback };
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || !Number.isInteger(value)) {
+      return { ok: false, value: fallback, reason: `${name} must be a positive integer milliseconds value` };
+    }
+    if (value > MAX_LONG_RUN_TIMEOUT_MS) {
+      return { ok: false, value: fallback, reason: `${name} exceeds max ${MAX_LONG_RUN_TIMEOUT_MS} ms` };
+    }
+    return { ok: true, value };
+  };
+  const defaultLong = MAX_LONG_RUN_TIMEOUT_MS;
+  const command = parse("command_timeout_ms", input.command_timeout_ms, longRun ? defaultLong : cfg.commandTimeoutMs);
+  if (!command.ok) return { ok: false, reason: command.reason, policy: undefined };
+  const job = parse("job_timeout_ms", input.job_timeout_ms, longRun ? defaultLong : cfg.jobTimeoutMs);
+  if (!job.ok) return { ok: false, reason: job.reason, policy: undefined };
+  if (command.value > job.value) {
+    return { ok: false, reason: "command_timeout_ms cannot exceed job_timeout_ms", policy: undefined };
+  }
+  return {
+    ok: true,
+    policy: {
+      longRun,
+      commandTimeoutMs: command.value,
+      jobTimeoutMs: job.value,
+      maxLongRunTimeoutMs: MAX_LONG_RUN_TIMEOUT_MS,
+    },
   };
 }
 

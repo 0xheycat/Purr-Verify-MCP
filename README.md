@@ -498,6 +498,10 @@ For public runners, set global fallbacks like `TOOLCHAIN_DEFAULT_NODE=26.3.0` an
 
 For heavy repos, prefer split commands (`bun run typecheck`, `bun run lint`, `bun run build`, `bun test`) and set long runner limits such as `COMMAND_TIMEOUT_MS=1800000` and `JOB_TIMEOUT_MS=7200000`.
 
+For fork/soak operations that need background Surfpool and multi-hour runtime,
+use explicit long-run mode. See [docs/LONG_RUN_OPERATIONS.md](docs/LONG_RUN_OPERATIONS.md)
+for the scoped command grammar, timeout cap, and loopback RPC payload format.
+
 **`next build` fails with `spawn .../node ENOENT`.**
 An external cleanup process removed a cached Node/Bun toolchain while the job was still using it. Keep toolchain cleanup idle-only (`activeJobs + queuedJobs == 0`) and avoid pruning freshly used toolchain directories. See [`docs/RUNNER_TOOLCHAIN_PARITY.md`](docs/RUNNER_TOOLCHAIN_PARITY.md#toolchain-cache-cleanup).
 
