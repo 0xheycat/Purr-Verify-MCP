@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { MAX_LONG_RUN_TIMEOUT_MS, VERSION, getConfig, isConfigured, githubTokenSource } from "@/lib/verify/config";
 import { activeJobCount, queuedJobCount, totalJobCount, loadPersisted } from "@/lib/verify/store";
 import { ensureScheduler } from "@/lib/verify/executor";
+import { runnerTools } from "@/lib/verify/system-tools";
 import type { HealthResponse } from "@/lib/verify/types";
 
 export const runtime = "nodejs";
@@ -15,6 +16,7 @@ export async function GET() {
   void ensureScheduler();
   const cfg = getConfig();
   const configured = isConfigured();
+  const tools = await runnerTools();
   const body: HealthResponse = {
     status: "ok",
     service: "purr-verify-mcp",
@@ -39,6 +41,7 @@ export async function GET() {
     commandTimeoutMs: cfg.commandTimeoutMs,
     jobTimeoutMs: cfg.jobTimeoutMs,
     maxLongRunTimeoutMs: MAX_LONG_RUN_TIMEOUT_MS,
+    runnerTools: tools,
   };
   return NextResponse.json(body);
 }

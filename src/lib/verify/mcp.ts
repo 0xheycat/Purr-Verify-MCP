@@ -16,6 +16,7 @@ import { validateCommands, listPatterns } from "./allowlist";
 import { enqueueJob, requestCancel, runJobSync } from "./executor";
 import { getJob, listJobs, loadPersisted } from "./store";
 import { activeJobCount, queuedJobCount, totalJobCount } from "./store";
+import { runnerTools } from "./system-tools";
 import {
   createShareToken,
   listShareTokensForJob,
@@ -268,6 +269,7 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
             await loadPersisted();
             const cfg = getConfig();
             const configured = isConfigured();
+            const tools = await runnerTools();
             const health: HealthResponse = {
               status: "ok",
               service: "purr-verify-mcp",
@@ -292,6 +294,7 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
               commandTimeoutMs: cfg.commandTimeoutMs,
               jobTimeoutMs: cfg.jobTimeoutMs,
               maxLongRunTimeoutMs: MAX_LONG_RUN_TIMEOUT_MS,
+              runnerTools: tools,
             };
             return rpcResult(rid, { content: [toText(health)], isError: false });
           }

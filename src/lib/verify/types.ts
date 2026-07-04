@@ -235,6 +235,18 @@ export interface HealthResponse {
   commandTimeoutMs?: number;
   jobTimeoutMs?: number;
   maxLongRunTimeoutMs?: number;
+  runnerTools?: {
+    cargo?: ToolAvailability;
+    rustc?: ToolAvailability;
+    surfpool?: ToolAvailability;
+  };
+}
+
+export interface ToolAvailability {
+  available: boolean;
+  path?: string | null;
+  version?: string | null;
+  error?: string | null;
 }
 
 // A share token grants public read-only access to a single job's result.

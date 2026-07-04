@@ -3,7 +3,9 @@
 Purr Verify is still not a general shell. Fork and soak jobs use a small
 operational allowlist with explicit safety bounds:
 
-- `git clone https://github.com/txtx/surfpool.git` is domain and repo locked.
+- `git clone https://github.com/txtx/surfpool.git` and
+  `git clone https://github.com/solana-foundation/surfpool.git` are domain and
+  repo locked. In production, prefer the baked `surfpool` binary and skip clone.
 - `cargo surfpool-install` is only accepted as that exact cargo subcommand.
 - `rustup-init -y` is accepted for runner bootstrap when Rust is absent.
 - `surfpool start` is handled by the runner as a detached background process;
@@ -12,6 +14,8 @@ operational allowlist with explicit safety bounds:
   loopback only. The payload must decode to a JSON object under 8 KiB; the
   executor converts it to `curl -H "Content-Type: application/json"
   --data-binary <json>` without a shell.
+- `curl -s http://127.0.0.1:8899` is loopback only and exists only as a local
+  RPC smoke check.
 - `bun run scripts/<script>.ts <safe --key=value args>` is restricted to the
   repo `scripts/` tree and alphanumeric/delimited flag values.
 - `sleep <seconds>` is capped at 32400 seconds for long-run smoke tests.
@@ -49,3 +53,6 @@ curl -s http://127.0.0.1:8899 -X POST --data-base64 <encoded-json>
 Poll `get_verification_job` while the job is running. Command stdout/stderr are
 persisted incrementally, so callers can tail progress without waiting for a
 6-8 hour job to finish.
+
+`health_check` also reports `runnerTools.surfpool`. Fork jobs should only
+depend on `surfpool start` once that field says `available: true`.
