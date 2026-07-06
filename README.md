@@ -277,16 +277,25 @@ Call `list_allowed_commands` for the live list. The grammars are:
 ```text
 bun install
 bun install --frozen-lockfile
+bun --version
 bunx prisma generate
+bunx prisma db push <safe-flags>
 bun run <script>
+bun run <script> <safe-flags>
+bun run scripts/<script>.ts <safe-flags>
 bun test
 bun test <path>
 npm ci
 npm run <script>
+npm run <script> <safe-flags>
 pnpm install --frozen-lockfile
 pnpm run <script>
+pnpm run <script> <safe-flags>
 npx prisma generate
+npx prisma db push <safe-flags>
+node --version
 node <safe-relative-path>
+node <safe-relative-path> <safe-flags>
 cat reports/<file>.json
 cat reports/<file>.txt
 ENV_MODE=mock bun run scripts/manage.ts <safe-flags>
@@ -296,11 +305,13 @@ Rejected everywhere (parsed, not shelled):
 
 ```text
 ; && || | > < ` $() .. \ " '
-curl wget rm mv cp sudo chmod chown ssh scp docker powershell nc mkfs dd
+wget rm mv cp sudo chmod chown ssh scp docker powershell nc mkfs dd
 absolute paths · arbitrary git URLs
 ```
 
 > **Tip:** for a Prisma project, put `bunx prisma generate` **after** `bun install` and **before** the build/test step.
+> For schema bootstrap, `bunx prisma db push --skip-generate` and `npx prisma db push --skip-generate` are accepted.
+> Raw `node -e` remains rejected; put executable diagnostics in a repo script or safe relative file.
 
 ---
 

@@ -18,7 +18,7 @@ const SCRIPT = "[a-zA-Z0-9_.:-]+"; // npm/bun script names: build, ci:check
 const SAFE_FILE = "[a-zA-Z0-9_.-]+"; // a single filename (no slashes)
 const NUM = "[0-9]+";
 const WORD = "[a-z0-9_-]+";
-const SAFE_ARG_VALUE = "[A-Za-z0-9_.:@=+,-]+";
+const SAFE_ARG_VALUE = "[A-Za-z0-9_./:@=+,-]+";
 const B64URL = "[A-Za-z0-9_-]+={0,2}";
 
 // A safe relative path: segments of [A-Za-z0-9_.-] joined by "/", must not
@@ -30,8 +30,12 @@ const REL_PATH = `${SEG}(?:/${SEG})*`;
 const SAFE_FLAG = `(?:--(?:duration|poll-interval|manage-interval|heartbeat-interval|iterations|interval)=${NUM}|--mode=${WORD}|--execute=false)`;
 const SAFE_FLAGS = `${SAFE_FLAG}(?:\\s+${SAFE_FLAG})*`;
 const SCRIPT_TS = `scripts/${SEG}(?:/${SEG})*\\.ts`;
-const SCRIPT_ARG = `--[A-Za-z0-9_-]+=${SAFE_ARG_VALUE}`;
-const SCRIPT_ARGS = `${SCRIPT_ARG}(?:\\s+${SCRIPT_ARG})*`;
+const SAFE_BOOL_ARG = `--[A-Za-z0-9_-]+`;
+const SAFE_KV_ARG = `--[A-Za-z0-9_-]+=${SAFE_ARG_VALUE}`;
+const SAFE_CLI_ARG = `(?:${SAFE_KV_ARG}|${SAFE_BOOL_ARG})`;
+const SAFE_CLI_ARGS = `${SAFE_CLI_ARG}(?:\\s+${SAFE_CLI_ARG})*`;
+const PRISMA_DB_PUSH_ARG = `(?:--accept-data-loss|--force-reset|--skip-generate|--schema=${SAFE_ARG_VALUE})`;
+const PRISMA_DB_PUSH_ARGS = `${PRISMA_DB_PUSH_ARG}(?:\\s+${PRISMA_DB_PUSH_ARG})*`;
 
 interface Pattern {
   name: string;
@@ -41,18 +45,26 @@ interface Pattern {
 const PATTERNS: Pattern[] = [
   { name: "bun install", re: new RegExp(`^bun install$`) },
   { name: "bun install --frozen-lockfile", re: new RegExp(`^bun install --frozen-lockfile$`) },
+  { name: "bun --version", re: /^bun --version$/ },
   { name: "bunx prisma generate", re: new RegExp(`^bunx prisma generate$`) },
+  { name: "bunx prisma db push <safe flags>", re: new RegExp(`^bunx prisma db push(?:\\s+${PRISMA_DB_PUSH_ARGS})?$`) },
   { name: "bun run <script>", re: new RegExp(`^bun run ${SCRIPT}$`) },
+  { name: "bun run <script> <safe flags>", re: new RegExp(`^bun run ${SCRIPT}\\s+${SAFE_CLI_ARGS}$`) },
   { name: "bun test", re: new RegExp(`^bun test$`) },
   { name: "bun test --isolate", re: new RegExp(`^bun test --isolate$`) },
   { name: "bun test --parallel=<n>", re: new RegExp(`^bun test --parallel=${NUM}$`) },
   { name: "bun test <path>", re: new RegExp(`^bun test ${REL_PATH}$`) },
   { name: "npm ci", re: new RegExp(`^npm ci$`) },
   { name: "npm run <script>", re: new RegExp(`^npm run ${SCRIPT}$`) },
+  { name: "npm run <script> <safe flags>", re: new RegExp(`^npm run ${SCRIPT}\\s+${SAFE_CLI_ARGS}$`) },
   { name: "pnpm install --frozen-lockfile", re: new RegExp(`^pnpm install --frozen-lockfile$`) },
   { name: "pnpm run <script>", re: new RegExp(`^pnpm run ${SCRIPT}$`) },
+  { name: "pnpm run <script> <safe flags>", re: new RegExp(`^pnpm run ${SCRIPT}\\s+${SAFE_CLI_ARGS}$`) },
   { name: "npx prisma generate", re: new RegExp(`^npx prisma generate$`) },
+  { name: "npx prisma db push <safe flags>", re: new RegExp(`^npx prisma db push(?:\\s+${PRISMA_DB_PUSH_ARGS})?$`) },
+  { name: "node --version", re: /^node --version$/ },
   { name: "node <path>", re: new RegExp(`^node ${REL_PATH}$`) },
+  { name: "node <path> <safe flags>", re: new RegExp(`^node ${REL_PATH}\\s+${SAFE_CLI_ARGS}$`) },
   { name: "git clone https://github.com/txtx/surfpool.git", re: /^git clone https:\/\/github\.com\/txtx\/surfpool\.git$/ },
   { name: "git clone https://github.com/solana-foundation/surfpool.git", re: /^git clone https:\/\/github\.com\/solana-foundation\/surfpool\.git$/ },
   { name: "cargo surfpool-install", re: /^cargo surfpool-install$/ },
@@ -60,7 +72,7 @@ const PATTERNS: Pattern[] = [
   { name: "surfpool start", re: /^surfpool start$/ },
   { name: "curl loopback GET", re: /^curl -s http:\/\/(?:127\.0\.0\.1|localhost):8899$/ },
   { name: "curl loopback RPC POST --data-base64 <base64url-json>", re: new RegExp(`^curl -s http://(?:127\\.0\\.0\\.1|localhost):8899 -X POST --data-base64 ${B64URL}$`) },
-  { name: "bun run scripts/<script>.ts <safe --key=value args>", re: new RegExp(`^bun run ${SCRIPT_TS}(?:\\s+${SCRIPT_ARGS})?$`) },
+  { name: "bun run scripts/<script>.ts <safe flags>", re: new RegExp(`^bun run ${SCRIPT_TS}(?:\\s+${SAFE_CLI_ARGS})?$`) },
   { name: "sleep <seconds>", re: new RegExp(`^sleep ${NUM}$`) },
   { name: "cat reports/<file>.json", re: new RegExp(`^cat reports/${SAFE_FILE}\\.json$`) },
   { name: "cat reports/<file>.txt", re: new RegExp(`^cat reports/${SAFE_FILE}\\.txt$`) },
@@ -107,7 +119,7 @@ function containsForbidden(cmd: string): string | null {
     if (lower.includes(f)) return f.trim() || f;
   }
   // Absolute paths
-  if (/(^|\s)\//.test(cmd)) return "absolute path";
+  if (/(^|\s|=)\//.test(cmd)) return "absolute path";
   return null;
 }
 

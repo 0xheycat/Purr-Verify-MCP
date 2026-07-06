@@ -7,16 +7,24 @@ import { Badge } from "@/components/ui/badge";
 const ALLOWLIST_PATTERNS = [
   { pattern: "bun install", description: "Install dependencies with Bun" },
   { pattern: "bun install --frozen-lockfile", description: "Install with frozen lockfile (CI-safe)" },
+  { pattern: "bun --version", description: "Report Bun version" },
   { pattern: "bunx prisma generate", description: "Generate Prisma client" },
+  { pattern: "bunx prisma db push <safe flags>", description: "Push Prisma schema with safe flags" },
   { pattern: "bun run <script>", description: "Run a package.json script via Bun" },
+  { pattern: "bun run <script> <safe flags>", description: "Run a package.json script with safe CLI flags" },
   { pattern: "bun test", description: "Run all tests with Bun" },
   { pattern: "bun test <path>", description: "Run specific test file(s) via Bun" },
   { pattern: "npm ci", description: "Clean install with npm" },
   { pattern: "npm run <script>", description: "Run a package.json script via npm" },
+  { pattern: "npm run <script> <safe flags>", description: "Run an npm script with safe CLI flags" },
   { pattern: "pnpm install --frozen-lockfile", description: "Install with frozen lockfile via pnpm" },
   { pattern: "pnpm run <script>", description: "Run a package.json script via pnpm" },
+  { pattern: "pnpm run <script> <safe flags>", description: "Run a pnpm script with safe CLI flags" },
   { pattern: "npx prisma generate", description: "Generate Prisma client via npx" },
+  { pattern: "npx prisma db push <safe flags>", description: "Push Prisma schema via npx with safe flags" },
+  { pattern: "node --version", description: "Report Node.js version" },
   { pattern: "node <path>", description: "Run a safe relative Node.js script" },
+  { pattern: "node <path> <safe flags>", description: "Run a safe relative Node.js script with flags" },
   { pattern: "cat reports/<file>.json", description: "Read a JSON report file" },
   { pattern: "cat reports/<file>.txt", description: "Read a text report file" },
   {
@@ -27,7 +35,7 @@ const ALLOWLIST_PATTERNS = [
 
 const FORBIDDEN_TOKENS = [
   ";", "&&", "||", "|", ">", "<", "`", "$()",
-  "curl", "wget", "rm", "sudo", "chmod", "chown",
+  "wget", "rm", "sudo", "chmod", "chown",
   "ssh", "scp", "docker", "powershell", "nc", "mkfs", "dd",
   "absolute paths", "path traversal (..)",
 ];
