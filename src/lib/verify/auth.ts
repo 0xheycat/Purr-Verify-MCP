@@ -1,43 +1,33 @@
 // Bearer token authentication for protected endpoints.
 //
-// Two auth modes (selected by AUTH_MODE env):
+// Supported auth paths:
 //
 // 1. server_token (default, backward compatible):
 //    Authorization: Bearer <VERIFY_TOKEN>
-//    The server authenticates the bearer against the configured VERIFY_TOKEN
-//    using a constant-time comparison. Cloning uses the server's env
-//    GITHUB_TOKEN (if set) for private repos. Good for stable/private
-//    deployments.
 //
-// 2. github_passthrough:
+// 2. embedded OAuth access token:
+//    Authorization: Bearer <OAuth JWT issued by this app>
+//    In server_token mode, the OAuth token is validated first. If valid, the
+//    request is accepted and executor falls back to env GITHUB_TOKEN.
+//
+// 3. github_passthrough:
 //    Authorization: Bearer <GitHub PAT>
-//    The server authenticates by calling the GitHub API
-//    (GET https://api.github.com/user) with the bearer token. If GitHub
-//    returns 200, the request is authenticated and the SAME GitHub token is
-//    used to clone/fetch private repos. This lets MCP clients paste a GitHub
-//    PAT directly as the bearer token, without the server needing
-//    GITHUB_TOKEN in env. Results are cached for 5 minutes by token hash to
-//    avoid hammering the GitHub API on every poll.
-//
-// SECURITY: The GitHub token / Authorization header is NEVER logged. It is
-// only ever (a) sent to api.github.com over HTTPS for validation, (b) used
-// to construct an x-access-token clone URL that is immediately redacted from
-// captured stdout/stderr by redact.ts. See also redact.ts which scrubs
-// github_pat_, ghp_, gho_, ghu_, ghs_, ghr_ patterns and x-access-token:@ URLs.
+//    The token is validated by calling GitHub API /user and then used for clone.
 
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { getConfig } from "./config";
+import { verifyOAuthAccessToken } from "./oauth-server";
 
 export interface AuthContext {
   ok: boolean;
   reason?: string;
   /** Active auth mode for this request. */
-  authMode: "server_token" | "github_passthrough";
+  authMode: "server_token" | "github_passthrough" | "oauth_jwt";
   /**
    * Per-request GitHub clone token.
    * - github_passthrough: the bearer GitHub PAT (used to clone private repos).
-   * - server_token: undefined → executor falls back to env GITHUB_TOKEN.
+   * - server_token/oauth_jwt: undefined → executor falls back to env GITHUB_TOKEN.
    * NEVER persisted to disk; lives only in the in-memory job runtime.
    */
   githubToken?: string;
@@ -46,17 +36,15 @@ export interface AuthContext {
 }
 
 // ---- GitHub passthrough validation cache ----
-// Keyed by sha256(token) so the raw token is never stored. In-memory only.
 interface CachedAuth {
   ok: boolean;
   user?: string;
   ts: number;
 }
 const authCache = new Map<string, CachedAuth>();
-const AUTH_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const AUTH_CACHE_TTL_MS = 5 * 60 * 1000;
 const GITHUB_API_TIMEOUT_MS = 8000;
 
-// Periodically prune stale cache entries to bound memory growth.
 setInterval(() => {
   const now = Date.now();
   for (const [k, v] of authCache) {
@@ -68,11 +56,6 @@ function tokenHash(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-/**
- * Validate a GitHub PAT by calling GET https://api.github.com/user.
- * Returns { ok, user } on HTTP 200. Fails closed (ok:false) on 401/403,
- * network error, or timeout — never throws.
- */
 async function validateGithubToken(token: string): Promise<{ ok: boolean; user?: string; reason?: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), GITHUB_API_TIMEOUT_MS);
@@ -93,27 +76,23 @@ async function validateGithubToken(token: string): Promise<{ ok: boolean; user?:
         const body = (await res.json()) as { login?: string };
         login = body?.login;
       } catch {
-        // Non-fatal: token is valid even if we can't parse the body.
+        // Token is valid even if the body cannot be parsed.
       }
       return { ok: true, user: login };
     }
     if (res.status === 401 || res.status === 403) {
       return { ok: false, reason: "GitHub rejected the token" };
     }
-    // 404 / 5xx / rate-limit → fail closed; don't reveal token state.
     return { ok: false, reason: `GitHub API returned ${res.status}` };
   } catch (e) {
     const err = e as Error;
-    if (err.name === "AbortError") {
-      return { ok: false, reason: "GitHub API validation timed out" };
-    }
+    if (err.name === "AbortError") return { ok: false, reason: "GitHub API validation timed out" };
     return { ok: false, reason: "GitHub API unreachable" };
   } finally {
     clearTimeout(timer);
   }
 }
 
-/** Constant-time string comparison. Returns true iff equal. */
 function safeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;
@@ -123,17 +102,9 @@ function safeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
-/**
- * Authenticate a request. Async because github_passthrough mode calls the
- * GitHub API (cached for 5 min by token hash).
- *
- * Supports Authorization: Bearer <token> header and ?token=<token> query
- * param (the latter is needed for SSE/EventSource which can't set headers).
- */
 export async function checkAuth(req: NextRequest): Promise<AuthContext> {
   const cfg = getConfig();
 
-  // Extract bearer token from header or ?token= query (SSE fallback).
   let token: string | null = null;
   const header = req.headers.get("authorization") || req.headers.get("Authorization");
   if (header) {
@@ -154,7 +125,6 @@ export async function checkAuth(req: NextRequest): Promise<AuthContext> {
   }
 
   if (cfg.authMode === "github_passthrough") {
-    // Validate the bearer against the GitHub API (cached).
     const hash = tokenHash(token);
     const cached = authCache.get(hash);
     const now = Date.now();
@@ -171,7 +141,13 @@ export async function checkAuth(req: NextRequest): Promise<AuthContext> {
     return { ok: true, authMode: "github_passthrough", githubToken: token, githubUser: res.user };
   }
 
-  // server_token mode (default).
+  // server_token mode can also accept OAuth access tokens issued by the
+  // embedded OAuth server. This keeps VERIFY_TOKEN private from ChatGPT.
+  const oauth = verifyOAuthAccessToken(token, req);
+  if (oauth.ok) {
+    return { ok: true, authMode: "oauth_jwt" };
+  }
+
   if (!cfg.verifyToken) {
     return {
       ok: false,
@@ -182,22 +158,16 @@ export async function checkAuth(req: NextRequest): Promise<AuthContext> {
   if (!safeEqual(token, cfg.verifyToken)) {
     return { ok: false, reason: "Invalid token", authMode: "server_token" };
   }
-  // githubToken is undefined here → executor falls back to env GITHUB_TOKEN.
+
   return { ok: true, authMode: "server_token" };
 }
 
 export function unauthorized(reason: string) {
-  return NextResponse.json(
-    { error: "unauthorized", message: reason },
-    { status: 401 }
-  );
+  return NextResponse.json({ error: "unauthorized", message: reason }, { status: 401 });
 }
 
 export function badRequest(message: string, extra?: Record<string, unknown>) {
-  return NextResponse.json(
-    { error: "bad_request", message, ...extra },
-    { status: 400 }
-  );
+  return NextResponse.json({ error: "bad_request", message, ...extra }, { status: 400 });
 }
 
 export function notFound(message = "not found") {
