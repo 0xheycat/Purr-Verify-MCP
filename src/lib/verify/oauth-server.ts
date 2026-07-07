@@ -14,10 +14,7 @@ interface AuthorizationCode {
 }
 
 function splitList(raw = ""): string[] {
-  return raw
-    .split(/[ ,]+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+  return raw.split(/[ ,]+/).map((item) => item.trim()).filter(Boolean);
 }
 
 function normalizeNoTrailingSlash(value: string): string {
@@ -80,12 +77,8 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ab, bb);
 }
 
-function base64url(input: string | Buffer): string {
-  return Buffer.from(input).toString("base64url");
-}
-
 function jsonBase64url(value: unknown): string {
-  return base64url(JSON.stringify(value));
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
 }
 
 function sha256Base64url(value: string): string {
@@ -123,7 +116,6 @@ export function verifyOAuthAccessToken(token: string, req: NextRequest): { ok: b
   }
 
   if (header.alg !== "HS256") return { ok: false, reason: "unsupported_alg" };
-
   const expected = hmacBase64url(`${encodedHeader}.${encodedPayload}`, secret);
   if (!safeEqual(signature, expected)) return { ok: false, reason: "bad_signature" };
 
@@ -170,12 +162,7 @@ function validateAuthorizeParams(params: URLSearchParams, req: NextRequest): str
 }
 
 function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 }
 
 function renderAuthorizePage(params: URLSearchParams, req: NextRequest, error = ""): string {
@@ -204,7 +191,7 @@ function renderAuthorizePage(params: URLSearchParams, req: NextRequest, error = 
     <p>ChatGPT is requesting access to <code>${escapeHtml(oauthResourceUrl(req))}</code>.</p>
     <p class="muted">Client: <code>${escapeHtml(params.get("client_id") || "")}</code><br>Scopes: <code>${escapeHtml(params.get("scope") || supportedOauthScopes().join(" "))}</code></p>
     ${error ? `<p class="err">${escapeHtml(error)}</p>` : ""}
-    <form method="post" action="/authorize">
+    <form method="post" action="/oauth/authorize">
       ${hidden}
       <label>Owner approval code</label>
       <input type="password" name="owner_code" autocomplete="current-password" required autofocus>
@@ -216,19 +203,17 @@ function renderAuthorizePage(params: URLSearchParams, req: NextRequest, error = 
 }
 
 function html(body: string, status = 200): Response {
-  return new Response(body, {
-    status,
-    headers: { "Content-Type": "text/html; charset=utf-8" },
-  });
+  return new Response(body, { status, headers: { "Content-Type": "text/html; charset=utf-8" } });
 }
 
 export function oauthAuthorizationServerMetadata(req: NextRequest): Record<string, unknown> {
   const issuer = oauthIssuer(req);
   return {
     issuer,
-    authorization_endpoint: `${issuer}/authorize`,
-    token_endpoint: `${issuer}/token`,
-    registration_endpoint: `${issuer}/register`,
+    authorization_endpoint: `${issuer}/oauth/authorize`,
+    token_endpoint: `${issuer}/oauth/exchange`,
+    registration_endpoint: `${issuer}/oauth/register`,
+    jwks_uri: `${issuer}/oauth/keys`,
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code"],
     code_challenge_methods_supported: ["S256"],
@@ -239,9 +224,7 @@ export function oauthAuthorizationServerMetadata(req: NextRequest): Record<strin
 }
 
 export async function handleAuthorize(req: NextRequest): Promise<Response> {
-  if (!ownerCode()) {
-    return html("<h1>OAuth setup required</h1><p>Set OAUTH_OWNER_CODE before using /authorize.</p>", 500);
-  }
+  if (!ownerCode()) return html("<h1>OAuth setup required</h1><p>Set OAUTH_OWNER_CODE before using OAuth.</p>", 500);
 
   if (req.method === "GET") {
     const url = new URL(req.url);
@@ -249,9 +232,7 @@ export async function handleAuthorize(req: NextRequest): Promise<Response> {
     return html(renderAuthorizePage(url.searchParams, req, error), error ? 400 : 200);
   }
 
-  if (req.method !== "POST") {
-    return NextResponse.json({ error: "method_not_allowed" }, { status: 405 });
-  }
+  if (req.method !== "POST") return NextResponse.json({ error: "method_not_allowed" }, { status: 405 });
 
   const params = new URLSearchParams(await req.text());
   const error = validateAuthorizeParams(params, req);
@@ -279,22 +260,15 @@ export async function handleAuthorize(req: NextRequest): Promise<Response> {
 }
 
 export async function handleToken(req: NextRequest): Promise<Response> {
-  if (req.method !== "POST") {
-    return NextResponse.json({ error: "method_not_allowed" }, { status: 405 });
-  }
+  if (req.method !== "POST") return NextResponse.json({ error: "method_not_allowed" }, { status: 405 });
 
   const params = new URLSearchParams(await req.text());
-  if (params.get("grant_type") !== "authorization_code") {
-    return NextResponse.json({ error: "unsupported_grant_type" }, { status: 400 });
-  }
+  if (params.get("grant_type") !== "authorization_code") return NextResponse.json({ error: "unsupported_grant_type" }, { status: 400 });
 
   const code = params.get("code") || "";
   const entry = authorizationCodes.get(code);
   authorizationCodes.delete(code);
-
-  if (!entry || entry.expires_at < Date.now()) {
-    return NextResponse.json({ error: "invalid_grant" }, { status: 400 });
-  }
+  if (!entry || entry.expires_at < Date.now()) return NextResponse.json({ error: "invalid_grant" }, { status: 400 });
 
   if (params.get("client_id") !== entry.client_id || params.get("redirect_uri") !== entry.redirect_uri) {
     return NextResponse.json({ error: "invalid_grant" }, { status: 400 });
@@ -318,20 +292,13 @@ export async function handleToken(req: NextRequest): Promise<Response> {
   });
 
   return NextResponse.json(
-    {
-      access_token: accessToken,
-      token_type: "Bearer",
-      expires_in: ttl,
-      scope: entry.scope,
-    },
+    { access_token: accessToken, token_type: "Bearer", expires_in: ttl, scope: entry.scope },
     { headers: { "Cache-Control": "no-store" } }
   );
 }
 
 export async function handleRegister(req: NextRequest): Promise<Response> {
-  if (req.method !== "POST") {
-    return NextResponse.json({ error: "method_not_allowed" }, { status: 405 });
-  }
+  if (req.method !== "POST") return NextResponse.json({ error: "method_not_allowed" }, { status: 405 });
 
   let body: { redirect_uris?: unknown } = {};
   try {
@@ -344,9 +311,7 @@ export async function handleRegister(req: NextRequest): Promise<Response> {
     ? body.redirect_uris.filter((uri): uri is string => typeof uri === "string")
     : [];
 
-  if (redirectUris.length === 0) {
-    return NextResponse.json({ error: "invalid_redirect_uri" }, { status: 400 });
-  }
+  if (redirectUris.length === 0) return NextResponse.json({ error: "invalid_redirect_uri" }, { status: 400 });
 
   const clientId = `chatgpt-${randomBytes(12).toString("base64url")}`;
   registeredClients.set(clientId, { redirect_uris: redirectUris, created_at: Date.now() });
