@@ -253,7 +253,7 @@ export async function handleAuthorize(req: NextRequest): Promise<Response> {
   callback.searchParams.set("code", code);
   const state = params.get("state");
   if (state) callback.searchParams.set("state", state);
-  return NextResponse.redirect(callback.toString());
+  return NextResponse.redirect(callback.toString(), 303);
 }
 
 export async function handleToken(req: NextRequest): Promise<Response> {
