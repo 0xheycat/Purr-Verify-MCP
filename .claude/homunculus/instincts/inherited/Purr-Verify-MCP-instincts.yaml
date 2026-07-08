@@ -1,0 +1,394 @@
+# Instincts generated from https://github.com/0xheycat/Purr-Verify-MCP
+# Generated: 2026-07-02T21:59:26.609Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: Purr-Verify-MCP-commit-conventional
+trigger: "when writing a commit message"
+confidence: 0.85
+domain: git
+source: repo-analysis
+source_repo: https://github.com/0xheycat/Purr-Verify-MCP
+---
+
+# Purr Verify MCP Commit Conventional
+
+## Action
+
+Use conventional commit format with prefixes: fix
+
+## Evidence
+
+- 2 commits analyzed
+- Detected conventional commit pattern
+- Examples: fix(runner): isolate job workspaces outside .next bundle + env injection + observability
+
+---
+id: Purr-Verify-MCP-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/0xheycat/Purr-Verify-MCP
+---
+
+# Purr Verify MCP Commit Length
+
+## Action
+
+Write detailed commit messages (~103 characters for first line)
+
+## Evidence
+
+- Average commit message length: 103 chars
+- Based on 2 commits
+
+---
+id: Purr-Verify-MCP-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/0xheycat/Purr-Verify-MCP
+---
+
+# Purr Verify MCP Naming Files
+
+## Action
+
+Use camelCase naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: camelCase
+
+---
+id: Purr-Verify-MCP-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/0xheycat/Purr-Verify-MCP
+---
+
+# Purr Verify MCP Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: Purr-Verify-MCP-arch-type-based
+trigger: "when adding new code"
+confidence: 0.8
+domain: architecture
+source: repo-analysis
+source_repo: https://github.com/0xheycat/Purr-Verify-MCP
+---
+
+# Purr Verify MCP Arch Type Based
+
+## Action
+
+Place code in the appropriate type folder (components/, services/, utils/, etc.)
+
+## Evidence
+
+- Type-based module organization detected
+- Folders: app, lib
+
+---
+id: Purr-Verify-MCP-test-separate
+trigger: "when writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/0xheycat/Purr-Verify-MCP
+---
+
+# Purr Verify MCP Test Separate
+
+## Action
+
+Place tests in the tests/ or __tests__/ directory, mirroring src structure
+
+## Evidence
+
+- Separate test directory pattern detected
+- Tests live in dedicated test folders
+
+---
+id: Purr-Verify-MCP-workflow-enhance-job-environment-and-observability
+trigger: "when doing enhance job environment and observability"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/0xheycat/Purr-Verify-MCP
+---
+
+# Purr Verify MCP Workflow Enhance Job Environment And Observability
+
+## Action
+
+Follow the enhance-job-environment-and-observability workflow:
+1. Update executor logic to handle per-job environment injection and redaction.
+2. Update store logic to manage per-job environment variables in runtime memory.
+3. Update mcp logic to validate, inject, and redact environment variables for jobs; expose new observability endpoints.
+4. Update config and redact logic to support new environment handling and redaction.
+5. Update types and health route to surface new observability data.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: src/lib/verify/executor.ts, src/lib/verify/store.ts, src/lib/verify/mcp.ts
+
+---
+id: purr-verify-mcp-instinct-file-naming
+trigger: "When creating or renaming a file in the codebase."
+confidence: 0.85
+domain: code-style
+source: repo-analysis
+source_repo: 0xheycat/Purr-Verify-MCP
+---
+
+# Purr Verify Mcp Instinct File Naming
+
+## Action
+
+Use camelCase for file names.
+
+## Evidence
+
+- Pattern in namingConventions.files
+- Seen in src/lib/verify/executor.ts
+
+---
+id: purr-verify-mcp-instinct-function-naming
+trigger: "When defining a new function."
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: 0xheycat/Purr-Verify-MCP
+---
+
+# Purr Verify Mcp Instinct Function Naming
+
+## Action
+
+Name functions using camelCase.
+
+## Evidence
+
+- Pattern in namingConventions.functions
+- Seen in src/lib/verify/executor.ts
+
+---
+id: purr-verify-mcp-instinct-class-naming
+trigger: "When defining a new class."
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: 0xheycat/Purr-Verify-MCP
+---
+
+# Purr Verify Mcp Instinct Class Naming
+
+## Action
+
+Name classes using PascalCase.
+
+## Evidence
+
+- Pattern in namingConventions.classes
+- Seen in src/lib/verify/types.ts
+
+---
+id: purr-verify-mcp-instinct-constant-naming
+trigger: "When declaring a constant."
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: 0xheycat/Purr-Verify-MCP
+---
+
+# Purr Verify Mcp Instinct Constant Naming
+
+## Action
+
+Name constants using SCREAMING_SNAKE_CASE.
+
+## Evidence
+
+- Pattern in namingConventions.constants
+- Seen in src/lib/verify/config.ts
+
+---
+id: purr-verify-mcp-instinct-import-style
+trigger: "When importing modules."
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: 0xheycat/Purr-Verify-MCP
+---
+
+# Purr Verify Mcp Instinct Import Style
+
+## Action
+
+Use a mixed import style (both default and named imports as appropriate).
+
+## Evidence
+
+- Pattern in importStyle
+- Seen in src/lib/verify/executor.ts
+
+---
+id: purr-verify-mcp-instinct-export-style
+trigger: "When exporting modules or functions."
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: 0xheycat/Purr-Verify-MCP
+---
+
+# Purr Verify Mcp Instinct Export Style
+
+## Action
+
+Prefer named exports.
+
+## Evidence
+
+- Pattern in exportStyle
+- Seen in src/lib/verify/types.ts
+
+---
+id: purr-verify-mcp-instinct-try-catch-errors
+trigger: "When handling errors in TypeScript code."
+confidence: 0.85
+domain: code-style
+source: repo-analysis
+source_repo: 0xheycat/Purr-Verify-MCP
+---
+
+# Purr Verify Mcp Instinct Try Catch Errors
+
+## Action
+
+Use try-catch blocks for error handling.
+
+## Evidence
+
+- Pattern in errorHandling.style
+- Seen in src/lib/verify/executor.ts
+
+---
+id: purr-verify-mcp-instinct-git-commit-format
+trigger: "When writing a git commit message."
+confidence: 0.9
+domain: git
+source: repo-analysis
+source_repo: 0xheycat/Purr-Verify-MCP
+---
+
+# Purr Verify Mcp Instinct Git Commit Format
+
+## Action
+
+Use conventional commit format with a type prefix (e.g., fix: ...).
+
+## Evidence
+
+- Pattern in commits.type
+- Example: fix(runner): isolate job workspaces outside .next bundle + env injection + observability
+
+---
+id: purr-verify-mcp-instinct-git-commit-length
+trigger: "When composing a commit message."
+confidence: 0.7
+domain: git
+source: repo-analysis
+source_repo: 0xheycat/Purr-Verify-MCP
+---
+
+# Purr Verify Mcp Instinct Git Commit Length
+
+## Action
+
+Aim for detailed commit messages around 100 characters.
+
+## Evidence
+
+- Pattern in commits.averageLength
+- Example: fix(runner): isolate job workspaces outside .next bundle + env injection + observability
+
+---
+id: purr-verify-mcp-instinct-test-location
+trigger: "When adding or updating tests."
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: 0xheycat/Purr-Verify-MCP
+---
+
+# Purr Verify Mcp Instinct Test Location
+
+## Action
+
+Place tests in a separate test location outside the main src directory.
+
+## Evidence
+
+- Pattern in architecture.folderStructure.testLocation
+- No test files in src/
+
+---
+id: purr-verify-mcp-instinct-test-type-organization
+trigger: "When organizing test files."
+confidence: 0.7
+domain: testing
+source: repo-analysis
+source_repo: 0xheycat/Purr-Verify-MCP
+---
+
+# Purr Verify Mcp Instinct Test Type Organization
+
+## Action
+
+Organize tests by type, matching the type-based module organization.
+
+## Evidence
+
+- Pattern in architecture.moduleOrganization
+- Seen in src/lib/verify/
+
+---
+id: purr-verify-mcp-instinct-enhance-job-env-workflow
+trigger: "When someone needs to improve or fix how job-specific environment variables are handled, injected, redacted, or surfaced in health/observability endpoints."
+confidence: 0.95
+domain: workflow
+source: repo-analysis
+source_repo: 0xheycat/Purr-Verify-MCP
+---
+
+# Purr Verify Mcp Instinct Enhance Job Env Workflow
+
+## Action
+
+Follow the enhance-job-environment-and-observability workflow: update executor, store, mcp, config, redact, types, and health route files as described.
+
+## Evidence
+
+- Workflow: enhance-job-environment-and-observability
+- Commits: Update executor logic to handle per-job environment injection and redaction, etc.
+- Files: src/lib/verify/executor.ts, src/lib/verify/store.ts, src/lib/verify/mcp.ts, src/lib/verify/config.ts, src/lib/verify/redact.ts, src/lib/verify/types.ts, src/app/api/health/route.ts
+
