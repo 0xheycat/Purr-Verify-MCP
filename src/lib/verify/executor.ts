@@ -711,9 +711,14 @@ async function runJob(jobId: string): Promise<void> {
   // Per-job environment variables (first-class env injection). In-memory only;
   // values are scrubbed from captured logs via envSecrets below.
   const jobEnv: Record<string, string> = rt.env ?? {};
-  const envSecrets = Object.values(jobEnv).filter(
-    (v) => typeof v === "string" && v.length >= 4
-  );
+  const envSecrets = Object.entries(jobEnv)
+    .filter(([key, value]) => {
+      if (typeof value !== "string" || value.length < 8) return false;
+      if (/^(?:true|false|null|undefined|mock|fork|mainnet|devnet|live_tiny|live_degen|dry_run)$/i.test(value)) return false;
+      if (/^(?:PURR_ENV|PURR_PROFILE|PURR_ARMED|PURR_EMERGENCY_STOP|PURR_HARD_STOP|PURR_MAX_OPEN_POSITIONS|PURR_MAX_POSITION_USD|PURR_DAILY_LOSS_CAP_USD|PURR_MAX_MAINNET_SLIPPAGE_BPS)$/i.test(key)) return false;
+      return true;
+    })
+    .map(([, value]) => value);
   const resolutionProbePackages = rt.resolutionProbePackages ?? [];
   const resolutionProbeModules = rt.resolutionProbeModules ?? [];
 
@@ -800,9 +805,9 @@ async function runJob(jobId: string): Promise<void> {
       ]),
     });
     const jobCacheEnv: Record<string, string> = {
-      BUN_INSTALL_CACHE_DIR: path.join(cacheDir, "bun"),
-      npm_config_cache: path.join(cacheDir, "npm"),
-      XDG_CACHE_HOME: path.join(cacheDir, "xdg"),
+      BUN_INSTALL_CACHE_DIR: process.env.PURR_VERIFY_BUN_CACHE_DIR || process.env.BUN_INSTALL_CACHE_DIR || path.join(cacheDir, "bun"),
+      npm_config_cache: process.env.PURR_VERIFY_NPM_CACHE_DIR || process.env.npm_config_cache || path.join(cacheDir, "npm"),
+      XDG_CACHE_HOME: process.env.PURR_VERIFY_XDG_CACHE_HOME || process.env.XDG_CACHE_HOME || path.join(cacheDir, "xdg"),
     };
 
     // Check cancel before running commands.
@@ -938,6 +943,39 @@ async function runJob(jobId: string): Promise<void> {
         );
         const rt3 = getRuntime(jobId);
         if (rt3) rt3.currentChild = null;
+      }
+
+      if (
+        result.code !== 0 &&
+        !result.timedOut &&
+        strategy.mode !== "not-install" &&
+        /Fail extracting tarball|failed to extract|ECONNRESET|ETIMEDOUT|fetch failed|network error/i.test(`${result.stdout}\n${result.stderr}`)
+      ) {
+        const retryCache = path.join(cacheDir, "bun-retry");
+        const retry = await runSpawn(
+          parsed.program,
+          parsed.args,
+          repoCommandEnv(toolchain, jobCacheEnv, jobEnv, parsed.env, { BUN_INSTALL_CACHE_DIR: retryCache }),
+          workdir,
+          timeoutPolicy.commandTimeoutMs,
+          cfg.maxLogBytes,
+          (child) => {
+            const rt3 = getRuntime(jobId);
+            if (rt3) rt3.currentChild = child;
+          },
+          {
+            cleanNodeEnv: true,
+            onStdout: (stdout, truncated) => updateCommand(jobId, i, { stdout: redactText(stdout, envSecrets), truncated }),
+            onStderr: (stderr, truncated) => updateCommand(jobId, i, { stderr: redactText(stderr, envSecrets), truncated }),
+          }
+        );
+        const rt3 = getRuntime(jobId);
+        if (rt3) rt3.currentChild = null;
+        retry.stdout = [
+          "[runner] transient install failure detected; retried once with a fresh Bun cache.",
+          retry.stdout,
+        ].filter(Boolean).join("\n");
+        result = retry;
       }
 
       const cmdEndMs = Date.now();

@@ -117,11 +117,11 @@ function decodeSignedPayload(token: string): { ok: boolean; reason?: string; pay
 }
 
 function signJwt(payload: Record<string, unknown>): string {
-  return signPayload(payload);
+  return signPayload(payload as unknown as Record<string, unknown>);
 }
 
 function signAuthorizationCode(payload: AuthorizationCodePayload): string {
-  return signPayload(payload);
+  return signPayload(payload as unknown as Record<string, unknown>);
 }
 
 function verifyAuthorizationCode(code: string): { ok: boolean; reason?: string; payload?: AuthorizationCodePayload } {
