@@ -25,7 +25,13 @@ const B64URL = "[A-Za-z0-9_-]+={0,2}";
 // start with "/", and ".." is forbidden globally (checked separately).
 const SEG = "[a-zA-Z0-9_.-]+";
 const REL_PATH = `${SEG}(?:/${SEG})*`;
-const PY_FILE = `${SEG}(?:/${SEG})*\\.py`;
+
+// Python path segments deliberately cannot start with "-". Without this
+// narrower grammar, an unallowlisted pytest flag such as `--pdb` could be
+// misclassified as a relative path and bypass the explicit pytest flag list.
+const PY_PATH_SEG = "[A-Za-z0-9_][A-Za-z0-9_.-]*";
+const PY_SAFE_PATH = `(?:\\.|${PY_PATH_SEG}(?:/${PY_PATH_SEG})*)`;
+const PY_FILE = `${PY_PATH_SEG}(?:/${PY_PATH_SEG})*\\.py`;
 const PY_MODULE = "[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*";
 
 // Safe flags for the ENV_MODE=mock manage script.
@@ -43,7 +49,7 @@ const PRISMA_DB_PUSH_ARGS = `${PRISMA_DB_PUSH_ARG}(?:\\s+${PRISMA_DB_PUSH_ARG})*
 // arbitrary `python -c`, arbitrary `python -m <module>`, arbitrary pip package
 // names, editable installs, or custom package indexes.
 const PYTEST_FLAG = `(?:-q|-v|-x|--disable-warnings|--strict-markers|--maxfail=${NUM}|--cov=${PY_MODULE}|--cov-report=term-missing)`;
-const PYTEST_ARG = `(?:${REL_PATH}|${PYTEST_FLAG})`;
+const PYTEST_ARG = `(?:${PY_SAFE_PATH}|${PYTEST_FLAG})`;
 const PYTEST_ARGS = `${PYTEST_ARG}(?:\\s+${PYTEST_ARG})*`;
 
 interface Pattern {
@@ -86,7 +92,7 @@ const PATTERNS: Pattern[] = [
   { name: "python -m pytest", re: /^(?:python|python3) -m pytest$/ },
   { name: "python -m pytest <safe args>", re: new RegExp(`^(?:python|python3) -m pytest\\s+${PYTEST_ARGS}$`) },
   { name: "python -m unittest", re: /^(?:python|python3) -m unittest$/ },
-  { name: "python -m compileall <path>", re: new RegExp(`^(?:python|python3) -m compileall ${REL_PATH}$`) },
+  { name: "python -m compileall <path>", re: new RegExp(`^(?:python|python3) -m compileall ${PY_SAFE_PATH}$`) },
   { name: "python -m build", re: /^(?:python|python3) -m build$/ },
   { name: "python <safe .py path>", re: new RegExp(`^(?:python|python3) ${PY_FILE}$`) },
   { name: "python <safe .py path> <safe flags>", re: new RegExp(`^(?:python|python3) ${PY_FILE}\\s+${SAFE_CLI_ARGS}$`) },
