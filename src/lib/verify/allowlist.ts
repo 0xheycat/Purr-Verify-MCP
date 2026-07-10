@@ -153,7 +153,6 @@ const FORBIDDEN_SUBSTRINGS = [
   "scp",
   "docker",
   "powershell",
-  "nc ",
   "mkfs",
   "dd ",
   "--index-url",
@@ -168,6 +167,9 @@ function containsForbidden(cmd: string): string | null {
   for (const f of FORBIDDEN_SUBSTRINGS) {
     if (lower.includes(f)) return f.trim() || f;
   }
+  // Netcat must be blocked as a command token, not as a raw substring: `sync `
+  // legitimately contains "nc " and is required by the allowlisted `uv sync`.
+  if (/(^|\s)nc(?:\s|$)/i.test(cmd)) return "nc";
   // Absolute paths
   if (/(^|\s|=)\//.test(cmd)) return "absolute path";
   return null;
