@@ -1,15 +1,22 @@
-// Parses a validated, allowlisted command string into a safe spawn invocation.
+// Parses a validated command string into a safe spawn invocation.
 //
-// Because the allowlist forbids quotes, shell metacharacters, and backslashes,
-// naive whitespace splitting is safe here. This module NEVER uses a shell.
+// The runner never uses a shell. The validator rejects shell operators and path
+// escapes before this parser receives the command, so whitespace tokenization is
+// deterministic for the supported developer command grammar.
+
+import path from "node:path";
 
 export interface ParsedCommand {
   program: string;
   args: string[];
   env: Record<string, string>;
-  // For `cat reports/<file>.{json,txt}` we read the file directly instead of
-  // spawning `cat`, which is safer and avoids needing the binary.
   readFile?: string;
+}
+
+function venvBin(executable: string): string {
+  return process.platform === "win32"
+    ? path.join(".venv", "Scripts", executable.endsWith(".exe") ? executable : `${executable}.exe`)
+    : path.join(".venv", "bin", executable);
 }
 
 function pythonJobEnv(): Record<string, string> {
@@ -21,66 +28,87 @@ function pythonJobEnv(): Record<string, string> {
     PYTHONUNBUFFERED: "1",
     PIP_CACHE_DIR: ".verify-cache/pip",
     UV_CACHE_DIR: ".verify-cache/uv",
+    UV_PROJECT_ENVIRONMENT: ".venv",
+    POETRY_VIRTUALENVS_CREATE: "true",
+    POETRY_VIRTUALENVS_IN_PROJECT: "true",
+    PIPENV_VENV_IN_PROJECT: "1",
+    PIPENV_NOSPIN: "1",
   };
 }
 
-function normalizePythonInvocation(program: string, args: string[], env: Record<string, string>): ParsedCommand | null {
+function normalizePythonInvocation(
+  program: string,
+  args: string[],
+  env: Record<string, string>
+): ParsedCommand | null {
   if (program !== "python" && program !== "python3") return null;
 
-  // Runtime discovery and venv creation must use the system interpreter.
-  if ((args.length === 1 && args[0] === "--version") ||
-      (args.length === 3 && args[0] === "-m" && args[1] === "venv" && args[2] === ".venv")) {
+  const runtimeInfo = args.length === 1 && ["--version", "--help", "-V"].includes(args[0]);
+  const createsVenv = args[0] === "-m" && args[1] === "venv" && args[args.length - 1] === ".venv";
+
+  // Runtime discovery and virtualenv creation must use the host/toolchain
+  // interpreter. All project work below is isolated inside `.venv`.
+  if (runtimeInfo || createsVenv) {
     return { program, args, env: { ...env, ...pythonJobEnv() } };
   }
 
-  // Every other accepted Python command is forced through the workspace-local
-  // virtualenv. This guarantees pip, pytest, build tools, and repo scripts never
-  // mutate or depend on the runner's global Python site-packages.
   return {
-    program: ".venv/bin/python",
+    program: venvBin("python"),
     args,
     env: { ...env, ...pythonJobEnv() },
   };
 }
 
-export function parseCommand(cmd: string): ParsedCommand {
-  const tokens = cmd.trim().split(/\s+/);
-  const env: Record<string, string> = {};
-  let i = 0;
+const DIRECT_VENV_TOOLS = new Set([
+  "pytest",
+  "ruff",
+  "mypy",
+  "pyright",
+  "tox",
+  "nox",
+  "coverage",
+  "django-admin",
+]);
 
-  // Consume leading ENV=VALUE prefixes (only ENV_MODE=mock is allowlisted, but
-  // handle the general shape for robustness).
-  while (i < tokens.length && /^[A-Z_][A-Z0-9_]*=/.test(tokens[i])) {
-    const eq = tokens[i].indexOf("=");
-    const key = tokens[i].slice(0, eq);
-    const val = tokens[i].slice(eq + 1);
-    env[key] = val;
-    i++;
+export function parseCommand(command: string): ParsedCommand {
+  const tokens = command.trim().split(/\s+/);
+  const env: Record<string, string> = {};
+  let index = 0;
+
+  while (index < tokens.length && /^[A-Z_][A-Z0-9_]*=/.test(tokens[index])) {
+    const separator = tokens[index].indexOf("=");
+    const key = tokens[index].slice(0, separator);
+    const value = tokens[index].slice(separator + 1);
+    env[key] = value;
+    index++;
   }
 
-  const rest = tokens.slice(i);
+  const rest = tokens.slice(index);
   const program = rest[0];
   const args = rest.slice(1);
 
-  // Special-case `cat reports/<file>` -> read file directly.
   if (program === "cat" && args.length === 1 && args[0].startsWith("reports/")) {
     return { program, args, env, readFile: args[0] };
   }
 
-  // Special-case Python: accepted dependency/test/build commands run inside the
-  // per-job `.venv`; only version probing and venv creation use system Python.
   const python = normalizePythonInvocation(program, args, env);
   if (python) return python;
 
-  // uv creates/uses the same workspace `.venv`. Cache and bytecode settings are
-  // scoped to the disposable job workspace and disappear during normal cleanup.
-  if (program === "uv") {
+  if (DIRECT_VENV_TOOLS.has(program)) {
+    return {
+      program: venvBin(program),
+      args,
+      env: { ...env, ...pythonJobEnv() },
+    };
+  }
+
+  // uv/uvx, Poetry, and Pipenv manage the same workspace-local `.venv` through
+  // their documented environment variables. Their binaries remain host tools;
+  // project executables launched through `run` live inside `.venv`.
+  if (["uv", "uvx", "poetry", "pipenv"].includes(program)) {
     return { program, args, env: { ...env, ...pythonJobEnv() } };
   }
 
-  // Special-case loopback JSON-RPC curl. The allowlist accepts a base64url
-  // JSON token instead of shell-quoted JSON so callers cannot smuggle shell
-  // syntax and `spawn(..., shell:false)` still receives the real JSON body.
   if (
     program === "curl" &&
     args.length === 6 &&
