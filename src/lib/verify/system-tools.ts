@@ -34,10 +34,13 @@ export async function probeTool(command: string, versionArgs: string[] = ["--ver
 }
 
 export async function runnerTools() {
-  const [cargo, rustc, surfpool] = await Promise.all([
+  const [cargo, rustc, surfpool, python, python3, uv] = await Promise.all([
     probeTool("cargo"),
     probeTool("rustc"),
     probeTool("surfpool"),
+    probeTool("python"),
+    probeTool("python3"),
+    probeTool("uv"),
   ]);
-  return { cargo, rustc, surfpool };
+  return { cargo, rustc, surfpool, python, python3, uv };
 }
