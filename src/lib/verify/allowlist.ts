@@ -25,6 +25,8 @@ const B64URL = "[A-Za-z0-9_-]+={0,2}";
 // start with "/", and ".." is forbidden globally (checked separately).
 const SEG = "[a-zA-Z0-9_.-]+";
 const REL_PATH = `${SEG}(?:/${SEG})*`;
+const PY_FILE = `${SEG}(?:/${SEG})*\\.py`;
+const PY_MODULE = "[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*";
 
 // Safe flags for the ENV_MODE=mock manage script.
 const SAFE_FLAG = `(?:--(?:duration|poll-interval|manage-interval|heartbeat-interval|iterations|interval)=${NUM}|--mode=${WORD}|--execute=false)`;
@@ -36,6 +38,13 @@ const SAFE_CLI_ARG = `(?:${SAFE_KV_ARG}|${SAFE_BOOL_ARG})`;
 const SAFE_CLI_ARGS = `${SAFE_CLI_ARG}(?:\\s+${SAFE_CLI_ARG})*`;
 const PRISMA_DB_PUSH_ARG = `(?:--accept-data-loss|--force-reset|--skip-generate|--schema=${SAFE_ARG_VALUE})`;
 const PRISMA_DB_PUSH_ARGS = `${PRISMA_DB_PUSH_ARG}(?:\\s+${PRISMA_DB_PUSH_ARG})*`;
+
+// Python verification is intentionally narrow. The runner never accepts
+// arbitrary `python -c`, arbitrary `python -m <module>`, arbitrary pip package
+// names, editable installs, or custom package indexes.
+const PYTEST_FLAG = `(?:-q|-v|-x|--disable-warnings|--strict-markers|--maxfail=${NUM}|--cov=${PY_MODULE}|--cov-report=term-missing)`;
+const PYTEST_ARG = `(?:${REL_PATH}|${PYTEST_FLAG})`;
+const PYTEST_ARGS = `${PYTEST_ARG}(?:\\s+${PYTEST_ARG})*`;
 
 interface Pattern {
   name: string;
@@ -65,6 +74,36 @@ const PATTERNS: Pattern[] = [
   { name: "node --version", re: /^node --version$/ },
   { name: "node <path>", re: new RegExp(`^node ${REL_PATH}$`) },
   { name: "node <path> <safe flags>", re: new RegExp(`^node ${REL_PATH}\\s+${SAFE_CLI_ARGS}$`) },
+
+  // Python / uv runtime and dependency verification.
+  { name: "python --version", re: /^(?:python|python3) --version$/ },
+  { name: "python -m venv .venv", re: /^(?:python|python3) -m venv \.venv$/ },
+  { name: "python -m pip install --upgrade pip", re: /^(?:python|python3) -m pip install --upgrade pip$/ },
+  { name: "python -m pip install -r requirements.txt", re: /^(?:python|python3) -m pip install -r requirements\.txt$/ },
+  { name: "python -m pip install -r requirements-dev.txt", re: /^(?:python|python3) -m pip install -r requirements-dev\.txt$/ },
+  { name: "python -m pip check", re: /^(?:python|python3) -m pip check$/ },
+  { name: "python -m pip_audit", re: /^(?:python|python3) -m pip_audit$/ },
+  { name: "python -m pytest", re: /^(?:python|python3) -m pytest$/ },
+  { name: "python -m pytest <safe args>", re: new RegExp(`^(?:python|python3) -m pytest\\s+${PYTEST_ARGS}$`) },
+  { name: "python -m unittest", re: /^(?:python|python3) -m unittest$/ },
+  { name: "python -m compileall <path>", re: new RegExp(`^(?:python|python3) -m compileall ${REL_PATH}$`) },
+  { name: "python -m build", re: /^(?:python|python3) -m build$/ },
+  { name: "python <safe .py path>", re: new RegExp(`^(?:python|python3) ${PY_FILE}$`) },
+  { name: "python <safe .py path> <safe flags>", re: new RegExp(`^(?:python|python3) ${PY_FILE}\\s+${SAFE_CLI_ARGS}$`) },
+  { name: "uv --version", re: /^uv --version$/ },
+  { name: "uv sync", re: /^uv sync$/ },
+  { name: "uv sync --frozen", re: /^uv sync --frozen$/ },
+  { name: "uv sync --dev --frozen", re: /^uv sync --dev --frozen$/ },
+  { name: "uv sync --all-extras --dev --frozen", re: /^uv sync --all-extras --dev --frozen$/ },
+  { name: "uv run pytest", re: /^uv run pytest$/ },
+  { name: "uv run pytest <safe args>", re: new RegExp(`^uv run pytest\\s+${PYTEST_ARGS}$`) },
+  { name: "uv run ruff check .", re: /^uv run ruff check \.$/ },
+  { name: "uv run ruff format --check .", re: /^uv run ruff format --check \.$/ },
+  { name: "uv run mypy .", re: /^uv run mypy \.$/ },
+  { name: "uv run pyright", re: /^uv run pyright$/ },
+  { name: "uv run pip-audit", re: /^uv run pip-audit$/ },
+  { name: "uv build", re: /^uv build$/ },
+
   { name: "git clone https://github.com/txtx/surfpool.git", re: /^git clone https:\/\/github\.com\/txtx\/surfpool\.git$/ },
   { name: "git clone https://github.com/solana-foundation/surfpool.git", re: /^git clone https:\/\/github\.com\/solana-foundation\/surfpool\.git$/ },
   { name: "cargo surfpool-install", re: /^cargo surfpool-install$/ },
@@ -94,7 +133,7 @@ const FORBIDDEN_SUBSTRINGS = [
   "$(",
   "..",
   "\\",
-  '"',
+  "\"",
   "'",
   "wget",
   "rm ",
@@ -111,6 +150,11 @@ const FORBIDDEN_SUBSTRINGS = [
   "nc ",
   "mkfs",
   "dd ",
+  "--index-url",
+  "--extra-index-url",
+  "--trusted-host",
+  "git+",
+  "file://",
 ];
 
 function containsForbidden(cmd: string): string | null {
