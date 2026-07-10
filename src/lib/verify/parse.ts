@@ -12,6 +12,37 @@ export interface ParsedCommand {
   readFile?: string;
 }
 
+function pythonJobEnv(): Record<string, string> {
+  return {
+    VIRTUAL_ENV: ".venv",
+    PIP_DISABLE_PIP_VERSION_CHECK: "1",
+    PIP_NO_INPUT: "1",
+    PYTHONDONTWRITEBYTECODE: "1",
+    PYTHONUNBUFFERED: "1",
+    PIP_CACHE_DIR: ".verify-cache/pip",
+    UV_CACHE_DIR: ".verify-cache/uv",
+  };
+}
+
+function normalizePythonInvocation(program: string, args: string[], env: Record<string, string>): ParsedCommand | null {
+  if (program !== "python" && program !== "python3") return null;
+
+  // Runtime discovery and venv creation must use the system interpreter.
+  if ((args.length === 1 && args[0] === "--version") ||
+      (args.length === 3 && args[0] === "-m" && args[1] === "venv" && args[2] === ".venv")) {
+    return { program, args, env: { ...env, ...pythonJobEnv() } };
+  }
+
+  // Every other accepted Python command is forced through the workspace-local
+  // virtualenv. This guarantees pip, pytest, build tools, and repo scripts never
+  // mutate or depend on the runner's global Python site-packages.
+  return {
+    program: ".venv/bin/python",
+    args,
+    env: { ...env, ...pythonJobEnv() },
+  };
+}
+
 export function parseCommand(cmd: string): ParsedCommand {
   const tokens = cmd.trim().split(/\s+/);
   const env: Record<string, string> = {};
@@ -34,6 +65,17 @@ export function parseCommand(cmd: string): ParsedCommand {
   // Special-case `cat reports/<file>` -> read file directly.
   if (program === "cat" && args.length === 1 && args[0].startsWith("reports/")) {
     return { program, args, env, readFile: args[0] };
+  }
+
+  // Special-case Python: accepted dependency/test/build commands run inside the
+  // per-job `.venv`; only version probing and venv creation use system Python.
+  const python = normalizePythonInvocation(program, args, env);
+  if (python) return python;
+
+  // uv creates/uses the same workspace `.venv`. Cache and bytecode settings are
+  // scoped to the disposable job workspace and disappear during normal cleanup.
+  if (program === "uv") {
+    return { program, args, env: { ...env, ...pythonJobEnv() } };
   }
 
   // Special-case loopback JSON-RPC curl. The allowlist accepts a base64url
