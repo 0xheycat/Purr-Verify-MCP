@@ -16,31 +16,39 @@ async function commandPath(command: string): Promise<string | null> {
   }
 }
 
-export async function probeTool(command: string, versionArgs: string[] = ["--version"]): Promise<ToolAvailability> {
-  const path = await commandPath(command);
-  if (!path) return { available: false, path: null, version: null, error: "not found in PATH" };
+export async function probeTool(
+  command: string,
+  versionArgs: string[] = ["--version"]
+): Promise<ToolAvailability> {
+  const resolvedPath = await commandPath(command);
+  if (!resolvedPath) return { available: false, path: null, version: null, error: "not found in PATH" };
   try {
     const { stdout, stderr } = await execFileAsync(command, versionArgs, { timeout: 10_000 });
     const version = (stdout || stderr).trim().split(/\r?\n/)[0] || null;
-    return { available: true, path, version, error: null };
-  } catch (e) {
+    return { available: true, path: resolvedPath, version, error: null };
+  } catch (error) {
     return {
       available: true,
-      path,
+      path: resolvedPath,
       version: null,
-      error: (e as Error).message,
+      error: (error as Error).message,
     };
   }
 }
 
 export async function runnerTools() {
-  const [cargo, rustc, surfpool, python, python3, uv] = await Promise.all([
+  const [cargo, rustc, surfpool, python, python3, uv, poetry, pipenv, tox, nox] = await Promise.all([
     probeTool("cargo"),
     probeTool("rustc"),
     probeTool("surfpool"),
     probeTool("python"),
     probeTool("python3"),
     probeTool("uv"),
+    probeTool("poetry"),
+    probeTool("pipenv"),
+    probeTool("tox", ["--version"]),
+    probeTool("nox", ["--version"]),
   ]);
-  return { cargo, rustc, surfpool, python, python3, uv };
+
+  return { cargo, rustc, surfpool, python, python3, uv, poetry, pipenv, tox, nox };
 }
