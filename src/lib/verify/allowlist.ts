@@ -1,11 +1,9 @@
 // Command allowlist validator.
 //
-// SECURITY: This is NOT a general shell executor. Every command must match one
-// of a fixed set of allowlisted grammars. The validator:
-//   1. Rejects commands containing any dangerous metacharacter or token.
-//   2. Requires the command to fully match exactly one allowlisted pattern.
-//
-// Only the exact grammars below are permitted. Anything else is rejected.
+// SECURITY MODEL: this is still not a shell. Commands are parsed into an
+// executable plus argv and spawned with shell:false. The policy blocks shell
+// operators, path escapes, absolute paths, loader overrides, and destructive
+// system commands, while keeping normal developer workflows usable.
 
 export interface ValidationResult {
   ok: boolean;
@@ -13,44 +11,29 @@ export interface ValidationResult {
   matchedPattern?: string;
 }
 
-// Building blocks for safe tokens.
-const SCRIPT = "[a-zA-Z0-9_.:-]+"; // npm/bun script names: build, ci:check
-const SAFE_FILE = "[a-zA-Z0-9_.-]+"; // a single filename (no slashes)
+const SCRIPT = "[a-zA-Z0-9_.:-]+";
+const SAFE_FILE = "[a-zA-Z0-9_.-]+";
 const NUM = "[0-9]+";
 const WORD = "[a-z0-9_-]+";
 const SAFE_ARG_VALUE = "[A-Za-z0-9_./:@=+,-]+";
 const B64URL = "[A-Za-z0-9_-]+={0,2}";
-
-// A safe relative path: segments of [A-Za-z0-9_.-] joined by "/", must not
-// start with "/", and ".." is forbidden globally (checked separately).
 const SEG = "[a-zA-Z0-9_.-]+";
 const REL_PATH = `${SEG}(?:/${SEG})*`;
-
-// Python path segments deliberately cannot start with "-". Without this
-// narrower grammar, an unallowlisted pytest flag such as `--pdb` could be
-// misclassified as a relative path and bypass the explicit pytest flag list.
-const PY_PATH_SEG = "[A-Za-z0-9_][A-Za-z0-9_.-]*";
-const PY_SAFE_PATH = `(?:\\.|${PY_PATH_SEG}(?:/${PY_PATH_SEG})*)`;
-const PY_FILE = `${PY_PATH_SEG}(?:/${PY_PATH_SEG})*\\.py`;
-const PY_MODULE = "[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*";
-
-// Safe flags for the ENV_MODE=mock manage script.
-const SAFE_FLAG = `(?:--(?:duration|poll-interval|manage-interval|heartbeat-interval|iterations|interval)=${NUM}|--mode=${WORD}|--execute=false)`;
-const SAFE_FLAGS = `${SAFE_FLAG}(?:\\s+${SAFE_FLAG})*`;
 const SCRIPT_TS = `scripts/${SEG}(?:/${SEG})*\\.ts`;
 const SAFE_BOOL_ARG = `--[A-Za-z0-9_-]+`;
 const SAFE_KV_ARG = `--[A-Za-z0-9_-]+=${SAFE_ARG_VALUE}`;
 const SAFE_CLI_ARG = `(?:${SAFE_KV_ARG}|${SAFE_BOOL_ARG})`;
 const SAFE_CLI_ARGS = `${SAFE_CLI_ARG}(?:\\s+${SAFE_CLI_ARG})*`;
+const SAFE_FLAG = `(?:--(?:duration|poll-interval|manage-interval|heartbeat-interval|iterations|interval)=${NUM}|--mode=${WORD}|--execute=false)`;
+const SAFE_FLAGS = `${SAFE_FLAG}(?:\\s+${SAFE_FLAG})*`;
 const PRISMA_DB_PUSH_ARG = `(?:--accept-data-loss|--force-reset|--skip-generate|--schema=${SAFE_ARG_VALUE})`;
 const PRISMA_DB_PUSH_ARGS = `${PRISMA_DB_PUSH_ARG}(?:\\s+${PRISMA_DB_PUSH_ARG})*`;
 
-// Python verification is intentionally narrow. The runner never accepts
-// arbitrary `python -c`, arbitrary `python -m <module>`, arbitrary pip package
-// names, editable installs, or custom package indexes.
-const PYTEST_FLAG = `(?:-q|-v|-x|--disable-warnings|--strict-markers|--maxfail=${NUM}|--cov=${PY_MODULE}|--cov-report=term-missing)`;
-const PYTEST_ARG = `(?:${PY_SAFE_PATH}|${PYTEST_FLAG})`;
-const PYTEST_ARGS = `${PYTEST_ARG}(?:\\s+${PYTEST_ARG})*`;
+const PY_MODULE_RE = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+const PY_SCRIPT_RE = /^(?:[A-Za-z0-9_][A-Za-z0-9_.-]*\/)*[A-Za-z0-9_][A-Za-z0-9_.-]*\.py$/;
+const SAFE_DEV_TOKEN_RE = /^[A-Za-z0-9_./:@=+,%~\[\]-]+$/;
+const SAFE_REQUIREMENT_RE = /^(?:[A-Za-z0-9_][A-Za-z0-9_.-]*\/)*[A-Za-z0-9_][A-Za-z0-9_.-]*\.(?:txt|in)$/;
+const SAFE_TOOL_RE = /^[A-Za-z0-9_.-]+$/;
 
 interface Pattern {
   name: string;
@@ -58,58 +41,28 @@ interface Pattern {
 }
 
 const PATTERNS: Pattern[] = [
-  { name: "bun install", re: new RegExp(`^bun install$`) },
-  { name: "bun install --frozen-lockfile", re: new RegExp(`^bun install --frozen-lockfile$`) },
+  { name: "bun install", re: /^bun install$/ },
+  { name: "bun install --frozen-lockfile", re: /^bun install --frozen-lockfile$/ },
   { name: "bun --version", re: /^bun --version$/ },
-  { name: "bunx prisma generate", re: new RegExp(`^bunx prisma generate$`) },
+  { name: "bunx prisma generate", re: /^bunx prisma generate$/ },
   { name: "bunx prisma db push <safe flags>", re: new RegExp(`^bunx prisma db push(?:\\s+${PRISMA_DB_PUSH_ARGS})?$`) },
   { name: "bun run <script>", re: new RegExp(`^bun run ${SCRIPT}$`) },
   { name: "bun run <script> <safe flags>", re: new RegExp(`^bun run ${SCRIPT}\\s+${SAFE_CLI_ARGS}$`) },
-  { name: "bun test", re: new RegExp(`^bun test$`) },
-  { name: "bun test --isolate", re: new RegExp(`^bun test --isolate$`) },
+  { name: "bun test", re: /^bun test$/ },
+  { name: "bun test --isolate", re: /^bun test --isolate$/ },
   { name: "bun test --parallel=<n>", re: new RegExp(`^bun test --parallel=${NUM}$`) },
   { name: "bun test <path>", re: new RegExp(`^bun test ${REL_PATH}$`) },
-  { name: "npm ci", re: new RegExp(`^npm ci$`) },
+  { name: "npm ci", re: /^npm ci$/ },
   { name: "npm run <script>", re: new RegExp(`^npm run ${SCRIPT}$`) },
   { name: "npm run <script> <safe flags>", re: new RegExp(`^npm run ${SCRIPT}\\s+${SAFE_CLI_ARGS}$`) },
-  { name: "pnpm install --frozen-lockfile", re: new RegExp(`^pnpm install --frozen-lockfile$`) },
+  { name: "pnpm install --frozen-lockfile", re: /^pnpm install --frozen-lockfile$/ },
   { name: "pnpm run <script>", re: new RegExp(`^pnpm run ${SCRIPT}$`) },
   { name: "pnpm run <script> <safe flags>", re: new RegExp(`^pnpm run ${SCRIPT}\\s+${SAFE_CLI_ARGS}$`) },
-  { name: "npx prisma generate", re: new RegExp(`^npx prisma generate$`) },
+  { name: "npx prisma generate", re: /^npx prisma generate$/ },
   { name: "npx prisma db push <safe flags>", re: new RegExp(`^npx prisma db push(?:\\s+${PRISMA_DB_PUSH_ARGS})?$`) },
   { name: "node --version", re: /^node --version$/ },
   { name: "node <path>", re: new RegExp(`^node ${REL_PATH}$`) },
   { name: "node <path> <safe flags>", re: new RegExp(`^node ${REL_PATH}\\s+${SAFE_CLI_ARGS}$`) },
-
-  // Python / uv runtime and dependency verification.
-  { name: "python --version", re: /^(?:python|python3) --version$/ },
-  { name: "python -m venv .venv", re: /^(?:python|python3) -m venv \.venv$/ },
-  { name: "python -m pip install --upgrade pip", re: /^(?:python|python3) -m pip install --upgrade pip$/ },
-  { name: "python -m pip install -r requirements.txt", re: /^(?:python|python3) -m pip install -r requirements\.txt$/ },
-  { name: "python -m pip install -r requirements-dev.txt", re: /^(?:python|python3) -m pip install -r requirements-dev\.txt$/ },
-  { name: "python -m pip check", re: /^(?:python|python3) -m pip check$/ },
-  { name: "python -m pip_audit", re: /^(?:python|python3) -m pip_audit$/ },
-  { name: "python -m pytest", re: /^(?:python|python3) -m pytest$/ },
-  { name: "python -m pytest <safe args>", re: new RegExp(`^(?:python|python3) -m pytest\\s+${PYTEST_ARGS}$`) },
-  { name: "python -m unittest", re: /^(?:python|python3) -m unittest$/ },
-  { name: "python -m compileall <path>", re: new RegExp(`^(?:python|python3) -m compileall ${PY_SAFE_PATH}$`) },
-  { name: "python -m build", re: /^(?:python|python3) -m build$/ },
-  { name: "python <safe .py path>", re: new RegExp(`^(?:python|python3) ${PY_FILE}$`) },
-  { name: "python <safe .py path> <safe flags>", re: new RegExp(`^(?:python|python3) ${PY_FILE}\\s+${SAFE_CLI_ARGS}$`) },
-  { name: "uv --version", re: /^uv --version$/ },
-  { name: "uv sync", re: /^uv sync$/ },
-  { name: "uv sync --frozen", re: /^uv sync --frozen$/ },
-  { name: "uv sync --dev --frozen", re: /^uv sync --dev --frozen$/ },
-  { name: "uv sync --all-extras --dev --frozen", re: /^uv sync --all-extras --dev --frozen$/ },
-  { name: "uv run pytest", re: /^uv run pytest$/ },
-  { name: "uv run pytest <safe args>", re: new RegExp(`^uv run pytest\\s+${PYTEST_ARGS}$`) },
-  { name: "uv run ruff check .", re: /^uv run ruff check \.$/ },
-  { name: "uv run ruff format --check .", re: /^uv run ruff format --check \.$/ },
-  { name: "uv run mypy .", re: /^uv run mypy \.$/ },
-  { name: "uv run pyright", re: /^uv run pyright$/ },
-  { name: "uv run pip-audit", re: /^uv run pip-audit$/ },
-  { name: "uv build", re: /^uv build$/ },
-
   { name: "git clone https://github.com/txtx/surfpool.git", re: /^git clone https:\/\/github\.com\/txtx\/surfpool\.git$/ },
   { name: "git clone https://github.com/solana-foundation/surfpool.git", re: /^git clone https:\/\/github\.com\/solana-foundation\/surfpool\.git$/ },
   { name: "cargo surfpool-install", re: /^cargo surfpool-install$/ },
@@ -121,13 +74,22 @@ const PATTERNS: Pattern[] = [
   { name: "sleep <seconds>", re: new RegExp(`^sleep ${NUM}$`) },
   { name: "cat reports/<file>.json", re: new RegExp(`^cat reports/${SAFE_FILE}\\.json$`) },
   { name: "cat reports/<file>.txt", re: new RegExp(`^cat reports/${SAFE_FILE}\\.txt$`) },
-  {
-    name: "ENV_MODE=mock bun run scripts/manage.ts <flags>",
-    re: new RegExp(`^ENV_MODE=mock bun run scripts/manage\\.ts(?:\\s+${SAFE_FLAGS})?$`),
-  },
+  { name: "ENV_MODE=mock bun run scripts/manage.ts <flags>", re: new RegExp(`^ENV_MODE=mock bun run scripts/manage\\.ts(?:\\s+${SAFE_FLAGS})?$`) },
 ];
 
-// Globally forbidden substrings/tokens. Defense in depth on top of allowlist.
+const FRIENDLY_PYTHON_PATTERNS = [
+  "python/python3 --version|--help",
+  "python/python3 -m venv .venv",
+  "python/python3 -m <module> <safe args>",
+  "python/python3 <relative-script.py> <safe args>",
+  "pip requirements/local/package installs inside .venv",
+  "uv sync|lock|run|build|python|pip|tool|tree|export",
+  "uvx <tool> <safe args>",
+  "poetry install|sync|lock|check|build|run|env|show|export",
+  "pipenv sync|install|run|check|verify|requirements|graph",
+  "pytest|ruff|mypy|pyright|tox|nox|coverage from .venv",
+];
+
 const FORBIDDEN_SUBSTRINGS = [
   ";",
   "&&",
@@ -141,20 +103,6 @@ const FORBIDDEN_SUBSTRINGS = [
   "\\",
   "\"",
   "'",
-  "wget",
-  "rm ",
-  "rm\t",
-  "mv ",
-  "cp ",
-  "sudo",
-  "chmod",
-  "chown",
-  "ssh",
-  "scp",
-  "docker",
-  "powershell",
-  "mkfs",
-  "dd ",
   "--index-url",
   "--extra-index-url",
   "--trusted-host",
@@ -162,21 +110,169 @@ const FORBIDDEN_SUBSTRINGS = [
   "file://",
 ];
 
-function containsForbidden(cmd: string): string | null {
-  const lower = cmd.toLowerCase();
-  for (const f of FORBIDDEN_SUBSTRINGS) {
-    if (lower.includes(f)) return f.trim() || f;
+const FORBIDDEN_COMMAND_TOKENS = new Set([
+  "rm",
+  "mv",
+  "cp",
+  "sudo",
+  "chmod",
+  "chown",
+  "ssh",
+  "scp",
+  "docker",
+  "powershell",
+  "nc",
+  "netcat",
+  "mkfs",
+  "dd",
+  "wget",
+]);
+
+function tokenize(command: string): string[] {
+  return command.trim().split(/\s+/).filter(Boolean);
+}
+
+function containsForbidden(command: string): string | null {
+  const lower = command.toLowerCase();
+  for (const value of FORBIDDEN_SUBSTRINGS) {
+    if (lower.includes(value)) return value;
   }
-  // Netcat must be blocked as a command token, not as a raw substring: `sync `
-  // legitimately contains "nc " and is required by the allowlisted `uv sync`.
-  if (/(^|\s)nc(?:\s|$)/i.test(cmd)) return "nc";
-  // Absolute paths
-  if (/(^|\s|=)\//.test(cmd)) return "absolute path";
+
+  const tokens = tokenize(lower);
+  for (const token of tokens) {
+    if (FORBIDDEN_COMMAND_TOKENS.has(token)) return token;
+  }
+
+  if (/(^|\s|=)\//.test(command)) return "absolute path";
   return null;
 }
 
-function validateLoopbackCurlPayload(cmd: string): string | null {
-  const match = cmd.match(/^curl -s http:\/\/(?:127\.0\.0\.1|localhost):8899 -X POST --data-base64 ([A-Za-z0-9_-]+={0,2})$/);
+function safeDeveloperArgs(args: string[]): boolean {
+  return args.every((arg) => arg === "." || (SAFE_DEV_TOKEN_RE.test(arg) && !arg.includes("..") && !arg.startsWith("/")));
+}
+
+function validatePipArgs(args: string[]): boolean {
+  if (args.length === 0) return false;
+  const action = args[0];
+
+  if (["check", "list", "freeze", "debug", "--version", "--help"].includes(action)) {
+    return safeDeveloperArgs(args.slice(1));
+  }
+
+  if (action === "show") {
+    return args.length >= 2 && safeDeveloperArgs(args.slice(1));
+  }
+
+  if (action !== "install" && action !== "download" && action !== "wheel") return false;
+  if (args.length < 2) return false;
+
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "-r" || arg === "--requirement") {
+      const file = args[++i];
+      if (!file || !SAFE_REQUIREMENT_RE.test(file)) return false;
+      continue;
+    }
+    if (!safeDeveloperArgs([arg])) return false;
+  }
+  return true;
+}
+
+function validatePythonCommand(command: string): ValidationResult | null {
+  const tokens = tokenize(command);
+  const program = tokens[0];
+  const args = tokens.slice(1);
+
+  if (program === "python" || program === "python3") {
+    if (args.length === 1 && ["--version", "--help", "-V"].includes(args[0])) {
+      return { ok: true, matchedPattern: "python runtime info" };
+    }
+
+    if (args[0] === "-c") {
+      return { ok: false, reason: "inline python -c is not accepted; commit a script and run it by relative path" };
+    }
+
+    if (args[0] === "-m") {
+      const moduleName = args[1];
+      if (!moduleName || !PY_MODULE_RE.test(moduleName)) {
+        return { ok: false, reason: "invalid Python module name" };
+      }
+      const moduleArgs = args.slice(2);
+      if (moduleName === "venv") {
+        const venvOk = moduleArgs.length >= 1 && moduleArgs[moduleArgs.length - 1] === ".venv" && safeDeveloperArgs(moduleArgs);
+        return venvOk
+          ? { ok: true, matchedPattern: "python -m venv .venv" }
+          : { ok: false, reason: "Python virtualenv target must be .venv" };
+      }
+      if (moduleName === "pip") {
+        return validatePipArgs(moduleArgs)
+          ? { ok: true, matchedPattern: "python -m pip <developer args>" }
+          : { ok: false, reason: "unsupported or unsafe pip arguments" };
+      }
+      return safeDeveloperArgs(moduleArgs)
+        ? { ok: true, matchedPattern: "python -m <module> <developer args>" }
+        : { ok: false, reason: "unsafe Python module arguments" };
+    }
+
+    if (args.length >= 1 && PY_SCRIPT_RE.test(args[0]) && safeDeveloperArgs(args.slice(1))) {
+      return { ok: true, matchedPattern: "python <relative script.py> <developer args>" };
+    }
+
+    return { ok: false, reason: "unsupported Python invocation" };
+  }
+
+  if (program === "uv") {
+    if (args.length === 1 && ["--version", "--help"].includes(args[0])) {
+      return { ok: true, matchedPattern: "uv runtime info" };
+    }
+    const action = args[0];
+    if (!["sync", "lock", "run", "build", "python", "pip", "tool", "tree", "export"].includes(action || "")) {
+      return { ok: false, reason: "unsupported uv command" };
+    }
+    return safeDeveloperArgs(args.slice(1))
+      ? { ok: true, matchedPattern: `uv ${action} <developer args>` }
+      : { ok: false, reason: "unsafe uv arguments" };
+  }
+
+  if (program === "uvx") {
+    return args.length >= 1 && SAFE_TOOL_RE.test(args[0]) && safeDeveloperArgs(args.slice(1))
+      ? { ok: true, matchedPattern: "uvx <tool> <developer args>" }
+      : { ok: false, reason: "unsafe uvx invocation" };
+  }
+
+  if (program === "poetry") {
+    const action = args[0];
+    if (action === "--version" || action === "--help") return { ok: true, matchedPattern: "poetry runtime info" };
+    if (!["install", "sync", "lock", "check", "build", "run", "env", "show", "export"].includes(action || "")) {
+      return { ok: false, reason: "unsupported poetry command" };
+    }
+    return safeDeveloperArgs(args.slice(1))
+      ? { ok: true, matchedPattern: `poetry ${action} <developer args>` }
+      : { ok: false, reason: "unsafe poetry arguments" };
+  }
+
+  if (program === "pipenv") {
+    const action = args[0];
+    if (action === "--version" || action === "--help") return { ok: true, matchedPattern: "pipenv runtime info" };
+    if (!["sync", "install", "run", "check", "verify", "requirements", "graph"].includes(action || "")) {
+      return { ok: false, reason: "unsupported pipenv command" };
+    }
+    return safeDeveloperArgs(args.slice(1))
+      ? { ok: true, matchedPattern: `pipenv ${action} <developer args>` }
+      : { ok: false, reason: "unsafe pipenv arguments" };
+  }
+
+  if (["pytest", "ruff", "mypy", "pyright", "tox", "nox", "coverage", "django-admin"].includes(program || "")) {
+    return safeDeveloperArgs(args)
+      ? { ok: true, matchedPattern: `${program} <developer args>` }
+      : { ok: false, reason: `unsafe ${program} arguments` };
+  }
+
+  return null;
+}
+
+function validateLoopbackCurlPayload(command: string): string | null {
+  const match = command.match(/^curl -s http:\/\/(?:127\.0\.0\.1|localhost):8899 -X POST --data-base64 ([A-Za-z0-9_-]+={0,2})$/);
   if (!match) return null;
   try {
     const json = Buffer.from(match[1], "base64url").toString("utf8");
@@ -191,30 +287,30 @@ function validateLoopbackCurlPayload(cmd: string): string | null {
   }
 }
 
-export function validateCommand(cmd: string): ValidationResult {
-  if (typeof cmd !== "string") return { ok: false, reason: "command must be a string" };
-  const trimmed = cmd.trim();
+export function validateCommand(command: string): ValidationResult {
+  if (typeof command !== "string") return { ok: false, reason: "command must be a string" };
+  const trimmed = command.trim();
   if (!trimmed) return { ok: false, reason: "empty command" };
-  if (trimmed.length > 500) return { ok: false, reason: "command too long" };
+  if (trimmed.length > 1000) return { ok: false, reason: "command too long" };
 
   const forbidden = containsForbidden(trimmed);
-  if (forbidden) {
-    return { ok: false, reason: `command contains forbidden token: ${forbidden}` };
-  }
+  if (forbidden) return { ok: false, reason: `command contains forbidden token: ${forbidden}` };
+
+  const python = validatePythonCommand(trimmed);
+  if (python) return python;
 
   const sleep = trimmed.match(/^sleep ([0-9]+)$/);
   if (sleep && Number(sleep[1]) > 32_400) {
     return { ok: false, reason: "sleep duration exceeds 32400 seconds" };
   }
+
   const curlPayloadError = validateLoopbackCurlPayload(trimmed);
   if (curlPayloadError) return { ok: false, reason: curlPayloadError };
 
-  for (const p of PATTERNS) {
-    if (p.re.test(trimmed)) {
-      return { ok: true, matchedPattern: p.name };
-    }
+  for (const pattern of PATTERNS) {
+    if (pattern.re.test(trimmed)) return { ok: true, matchedPattern: pattern.name };
   }
-  return { ok: false, reason: "command does not match any allowlisted pattern" };
+  return { ok: false, reason: "command does not match a supported developer workflow" };
 }
 
 export function validateCommands(commands: unknown): {
@@ -227,17 +323,14 @@ export function validateCommands(commands: unknown): {
   if (commands.length > 50) return { ok: false, reason: "too many commands (max 50)" };
   const out: string[] = [];
   for (let i = 0; i < commands.length; i++) {
-    const c = commands[i];
-    const res = validateCommand(c as string);
-    if (!res.ok) {
-      return { ok: false, reason: `command #${i + 1} rejected: ${res.reason}` };
-    }
-    out.push((c as string).trim());
+    const command = commands[i];
+    const result = validateCommand(command as string);
+    if (!result.ok) return { ok: false, reason: `command #${i + 1} rejected: ${result.reason}` };
+    out.push((command as string).trim());
   }
   return { ok: true, commands: out };
 }
 
-// List of supported allowlisted patterns (for docs / UI display).
 export function listPatterns(): string[] {
-  return PATTERNS.map((p) => p.name);
+  return [...PATTERNS.map((pattern) => pattern.name), ...FRIENDLY_PYTHON_PATTERNS];
 }
