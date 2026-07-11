@@ -29,7 +29,7 @@
     "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",
     "typecheck": "tsc --noEmit",
     "check": "bun run typecheck && bun run lint && bun run build",
-    "test:tenancy": "bun test src/lib/tenancy/authorization.test.ts src/lib/tenancy/hosted-principal-resolver.test.ts src/lib/jobs/hosted-job-repository.test.ts src/lib/jobs/prisma-hosted-job-store.test.ts src/lib/jobs/job-repository-factory.test.ts",
+    "test:tenancy": "bun test src/lib/tenancy/authorization.test.ts src/lib/tenancy/hosted-principal-resolver.test.ts src/lib/tenancy/prisma-hosted-credential-resolvers.test.ts src/lib/jobs/hosted-job-repository.test.ts src/lib/jobs/prisma-hosted-job-store.test.ts src/lib/jobs/job-repository-factory.test.ts",
     "selftest:runner": "bun scripts/runner-toolchain-self-test.ts",
     "lint": "eslint .",
     "db:push": "prisma db push",
