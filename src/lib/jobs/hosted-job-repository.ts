@@ -1,5 +1,6 @@
 import {
   TenantAccessError,
+  assertCanCreateTenantResource,
   assertCanMutateTenantResource,
   assertCanReadTenantResource,
   type TenantPrincipal,
@@ -53,9 +54,7 @@ export class HostedJobRepository {
     principal: TenantPrincipal,
     input: Omit<CreateHostedJobInput, "ownerUserId">,
   ): Promise<HostedVerificationJob> {
-    if (!principal.tenantIds.has(input.tenantId)) {
-      throw new TenantAccessError();
-    }
+    assertCanCreateTenantResource(principal, input.tenantId);
 
     return this.store.insert({ ...input, ownerUserId: principal.userId });
   }

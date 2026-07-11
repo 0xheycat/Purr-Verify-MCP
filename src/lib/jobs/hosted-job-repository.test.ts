@@ -48,7 +48,11 @@ class MemoryHostedJobStore implements HostedJobStore {
   }
 }
 
-function principal(userId: string, tenantId: string, role: "member" | "admin" = "member"): TenantPrincipal {
+function principal(
+  userId: string,
+  tenantId: string,
+  role: "viewer" | "member" | "admin" = "member",
+): TenantPrincipal {
   return {
     userId,
     tenantIds: new Set([tenantId]),
@@ -85,6 +89,14 @@ describe("HostedJobRepository", () => {
     await expect(repository.get(principal("user-b", "tenant-b"), job.id)).rejects.toBeInstanceOf(
       TenantAccessError,
     );
+  });
+
+  test("prevents tenant viewers from creating jobs", async () => {
+    const repository = new HostedJobRepository(new MemoryHostedJobStore());
+
+    await expect(
+      repository.create(principal("viewer-a", "tenant-a", "viewer"), input("tenant-a")),
+    ).rejects.toBeInstanceOf(TenantAccessError);
   });
 
   test("prevents members mutating another user's job", async () => {

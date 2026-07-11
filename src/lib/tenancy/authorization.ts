@@ -34,6 +34,18 @@ export function canReadTenantResource(
   return canAccessTenant(principal, resource.tenantId);
 }
 
+export function canCreateTenantResource(
+  principal: TenantPrincipal,
+  tenantId: string,
+): boolean {
+  if (!canAccessTenant(principal, tenantId)) {
+    return false;
+  }
+
+  const role = principal.rolesByTenant?.get(tenantId);
+  return role !== "viewer";
+}
+
 export function canMutateTenantResource(
   principal: TenantPrincipal,
   resource: TenantOwnedResource,
@@ -55,6 +67,15 @@ export function assertCanReadTenantResource(
   resource: TenantOwnedResource,
 ): void {
   if (!canReadTenantResource(principal, resource)) {
+    throw new TenantAccessError();
+  }
+}
+
+export function assertCanCreateTenantResource(
+  principal: TenantPrincipal,
+  tenantId: string,
+): void {
+  if (!canCreateTenantResource(principal, tenantId)) {
     throw new TenantAccessError();
   }
 }
