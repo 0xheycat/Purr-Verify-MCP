@@ -117,6 +117,45 @@ describe("createPrismaHostedCredentialResolvers", () => {
     expect(identity?.userId).toBe("user-a");
   });
 
+  test("rejects read-only bearer tokens for hosted MCP mutations", async () => {
+    const token = {
+      expiresAt: activeUntil,
+      revokedAt: null,
+      audience: "https://verify.example/mcp",
+      scopes: ["verify:read"],
+      clientId: "chatgpt-client",
+      user,
+    };
+    const resolvers = createPrismaHostedCredentialResolvers(client({ accessToken: token }), {
+      audience: "https://verify.example/mcp",
+      requiredBearerScopes: ["verify:read", "verify:write"],
+      now: fixedNow,
+    });
+
+    expect(await resolvers.resolveBearer("read-only-token")).toBeNull();
+  });
+
+  test("accepts bearer tokens containing both hosted MCP read and write scopes", async () => {
+    const token = {
+      expiresAt: activeUntil,
+      revokedAt: null,
+      audience: "https://verify.example/mcp",
+      scopes: ["verify:read", "verify:write"],
+      clientId: "chatgpt-client",
+      user,
+    };
+    const resolvers = createPrismaHostedCredentialResolvers(client({ accessToken: token }), {
+      audience: "https://verify.example/mcp",
+      requiredBearerScopes: ["verify:read", "verify:write"],
+      now: fixedNow,
+    });
+
+    const identity = await resolvers.resolveBearer("read-write-token");
+
+    expect(identity?.clientId).toBe("chatgpt-client");
+    expect(identity?.userId).toBe("user-a");
+  });
+
   test("rejects wrong audience, insufficient scopes, expiry, and revocation", async () => {
     const base = {
       expiresAt: activeUntil,
