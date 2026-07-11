@@ -20,13 +20,14 @@ function hostedOAuthAudience(): string {
 
 export async function resolveHostedPrincipalFromRequest(
   req: NextRequest,
+  requiredBearerScopes: readonly string[] = ["verify:read"],
 ): Promise<HostedRequestPrincipal | null> {
   if (!isHostedMode()) return null;
 
   const prisma = await getHostedPrismaClient<HostedCredentialPrismaClient & { $disconnect(): Promise<void> }>();
   const resolvers = createPrismaHostedCredentialResolvers(prisma, {
     audience: hostedOAuthAudience(),
-    requiredBearerScopes: ["verify:read"],
+    requiredBearerScopes,
   });
 
   return resolveHostedRequestPrincipal(
