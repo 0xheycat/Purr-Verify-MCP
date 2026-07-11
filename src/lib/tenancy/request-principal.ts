@@ -10,8 +10,10 @@ export interface HostedRequestPrincipal extends TenantPrincipal {
   clientId?: string;
 }
 
+export type PrincipalContextErrorCode = "UNAUTHENTICATED" | "INVALID_CREDENTIAL";
+
 export class PrincipalContextError extends Error {
-  readonly code = "UNAUTHENTICATED";
+  readonly code: PrincipalContextErrorCode = "UNAUTHENTICATED";
 
   constructor(message = "Authenticated principal is required.") {
     super(message);
