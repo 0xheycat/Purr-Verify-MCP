@@ -26,6 +26,12 @@ function toText(value: unknown): { type: "text"; text: string } {
   return { type: "text", text: JSON.stringify(value, null, 2) };
 }
 
+function requiredScopesForTool(name: string): readonly string[] {
+  return name === "cancel_verification_job"
+    ? ["verify:read", "verify:write"]
+    : ["verify:read"];
+}
+
 export async function handleHostedMcpJobRead(
   req: NextRequest,
   message: HostedMcpMessage,
@@ -33,12 +39,16 @@ export async function handleHostedMcpJobRead(
   if (!isHostedMode() || message.method !== "tools/call") return null;
 
   const name = message.params?.name;
-  if (name !== "get_verification_job" && name !== "list_verification_jobs") {
+  if (
+    name !== "get_verification_job" &&
+    name !== "list_verification_jobs" &&
+    name !== "cancel_verification_job"
+  ) {
     return null;
   }
 
   const id = message.id ?? null;
-  const principal = await resolveHostedPrincipalFromRequest(req);
+  const principal = await resolveHostedPrincipalFromRequest(req, requiredScopesForTool(name));
   if (!principal) {
     return rpcError(id, -32001, "Unauthorized");
   }
@@ -47,7 +57,7 @@ export async function handleHostedMcpJobRead(
   const args = message.params?.arguments || {};
 
   try {
-    if (name === "get_verification_job") {
+    if (name === "get_verification_job" || name === "cancel_verification_job") {
       const jobId = String(args.jobId || "");
       if (!jobId) {
         return rpcResult(id, {
@@ -56,7 +66,9 @@ export async function handleHostedMcpJobRead(
         });
       }
 
-      const job = await repository.get(principal, jobId);
+      const job = name === "cancel_verification_job"
+        ? await repository.cancel(principal, jobId)
+        : await repository.get(principal, jobId);
       return rpcResult(id, { content: [toText(job)], isError: false });
     }
 
