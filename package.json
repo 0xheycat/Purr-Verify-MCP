@@ -36,7 +36,7 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
-    "db:hosted:validate": "prisma validate --schema prisma/hosted/schema.prisma",
+    "db:hosted:validate": "node scripts/validate-hosted-prisma.mjs",
     "db:hosted:generate": "prisma generate --schema prisma/hosted/schema.prisma"
   },
   "dependencies": {
