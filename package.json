@@ -29,12 +29,15 @@
     "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",
     "typecheck": "tsc --noEmit",
     "check": "bun run typecheck && bun run lint && bun run build",
+    "test:tenancy": "bun test src/lib/tenancy/authorization.test.ts",
     "selftest:runner": "bun scripts/runner-toolchain-self-test.ts",
     "lint": "eslint .",
     "db:push": "prisma db push",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
-    "db:reset": "prisma migrate reset"
+    "db:reset": "prisma migrate reset",
+    "db:hosted:validate": "prisma validate --schema prisma/hosted/schema.prisma",
+    "db:hosted:generate": "prisma generate --schema prisma/hosted/schema.prisma"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
