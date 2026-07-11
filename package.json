@@ -25,7 +25,7 @@
   ],
   "scripts": {
     "dev": "next dev -p 3000 2>&1 | tee dev.log",
-    "build": "next build && node scripts/copy-standalone-assets.mjs",
+    "build": "bun run db:hosted:generate && next build && node scripts/copy-standalone-assets.mjs",
     "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",
     "typecheck": "tsc --noEmit",
     "check": "bun run typecheck && bun run lint && bun run build",
