@@ -75,6 +75,7 @@ model GitHubInstallation {
   tenantId              String
   tenant                Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   repositories          InstalledRepository[]
+  jobs                  VerificationJob[]
   suspendedAt           DateTime?
   createdAt             DateTime              @default(now())
   updatedAt             DateTime              @updatedAt
@@ -127,4 +128,5 @@ model VerificationJob {
   @@index([tenantId, status])
   @@index([ownerUserId])
   @@index([repositoryId])
+  @@index([installationId])
 }
