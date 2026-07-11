@@ -37,6 +37,8 @@ model User {
   avatarUrl       String?
   memberships     TenantMembership[]
   ownedJobs       VerificationJob[]  @relation("JobOwner")
+  sessions        UserSession[]
+  oauthAccessTokens OAuthAccessToken[]
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
 }
@@ -129,4 +131,36 @@ model VerificationJob {
   @@index([ownerUserId])
   @@index([repositoryId])
   @@index([installationId])
+}
+
+model UserSession {
+  id          String    @id @default(cuid())
+  tokenHash   String    @unique
+  userId      String
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model OAuthAccessToken {
+  id          String    @id @default(cuid())
+  tokenHash   String    @unique
+  userId      String
+  clientId    String
+  audience    String
+  scopes      String[]
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([clientId])
+  @@index([expiresAt])
 }
