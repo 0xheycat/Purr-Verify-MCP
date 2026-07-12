@@ -34,7 +34,7 @@ interface PrismaVerificationJobDelegate {
   create(args: { data: Record<string, unknown> }): Promise<PrismaVerificationJobRecord>;
   findUnique(args: { where: { id: string } }): Promise<PrismaVerificationJobRecord | null>;
   findMany(args: {
-    where: { tenantId: { in: readonly string[] } };
+    where: { tenantId: { in: string[] } };
     orderBy: { createdAt: "desc" };
   }): Promise<PrismaVerificationJobRecord[]>;
   update(args: {
@@ -91,7 +91,7 @@ export class PrismaHostedJobStore implements HostedJobStore {
   async listByTenantIds(tenantIds: readonly string[]): Promise<HostedVerificationJob[]> {
     if (tenantIds.length === 0) return [];
     const records = await this.prisma.verificationJob.findMany({
-      where: { tenantId: { in: tenantIds } },
+      where: { tenantId: { in: [...tenantIds] } },
       orderBy: { createdAt: "desc" },
     });
     return records.map(toHostedJob);
