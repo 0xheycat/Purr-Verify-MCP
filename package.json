@@ -37,7 +37,7 @@
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
     "db:hosted:validate": "node scripts/validate-hosted-prisma.mjs",
-    "db:hosted:generate": "prisma generate --schema prisma/hosted/schema.prisma"
+    "db:hosted:generate": "node scripts/generate-hosted-prisma.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
