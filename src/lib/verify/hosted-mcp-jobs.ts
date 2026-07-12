@@ -15,6 +15,24 @@ interface HostedMcpMessage {
   };
 }
 
+export interface HostedCreateJobInput {
+  repo: string;
+  ref: string;
+  workflow: {
+    version: 1;
+    commands: string[];
+    continueOnError: boolean;
+    metadata: Record<string, unknown>;
+    expectedHead: string | null;
+    mode: "async";
+  };
+  environmentName: string | null;
+}
+
+export type HostedCreateJobParseResult =
+  | { ok: true; value: HostedCreateJobInput }
+  | { ok: false; message: string };
+
 function rpcError(id: string | number | null, code: number, message: string) {
   return { jsonrpc: "2.0", id, error: { code, message } };
 }
@@ -40,14 +58,44 @@ function validationFailure(id: string | number | null, message: string) {
   });
 }
 
-function hostedWorkflow(args: Record<string, unknown>) {
+export function parseHostedCreateJobInput(args: Record<string, unknown>): HostedCreateJobParseResult {
+  const repo = typeof args.repo === "string" ? args.repo.trim() : "";
+  const ref = typeof args.ref === "string" ? args.ref.trim() : "";
+  const commands = Array.isArray(args.commands)
+    ? args.commands
+      .filter((command): command is string => typeof command === "string")
+      .map((command) => command.trim())
+      .filter((command) => command.length > 0)
+    : [];
+
+  if (!repo) return { ok: false, message: "repo is required" };
+  if (!ref) return { ok: false, message: "ref is required" };
+  if (commands.length === 0) {
+    return { ok: false, message: "commands must contain at least one command" };
+  }
+  if (args.mode === "sync") {
+    return { ok: false, message: "hosted verification jobs must use mode='async'" };
+  }
+
+  const metadata = typeof args.metadata === "object" && args.metadata !== null && !Array.isArray(args.metadata)
+    ? args.metadata as Record<string, unknown>
+    : {};
+
   return {
-    version: 1,
-    commands: Array.isArray(args.commands) ? args.commands : [],
-    continueOnError: args.continue_on_error === true,
-    metadata: typeof args.metadata === "object" && args.metadata !== null ? args.metadata : {},
-    expectedHead: typeof args.expected_head === "string" ? args.expected_head : null,
-    mode: "async",
+    ok: true,
+    value: {
+      repo,
+      ref,
+      workflow: {
+        version: 1,
+        commands,
+        continueOnError: args.continue_on_error === true,
+        metadata,
+        expectedHead: typeof args.expected_head === "string" ? args.expected_head.trim() || null : null,
+        mode: "async",
+      },
+      environmentName: typeof args.environment === "string" ? args.environment.trim() || null : null,
+    },
   };
 }
 
@@ -78,27 +126,17 @@ export async function handleHostedMcpJobRead(
 
   try {
     if (name === "create_verification_job") {
-      const repo = typeof args.repo === "string" ? args.repo.trim() : "";
-      const ref = typeof args.ref === "string" ? args.ref.trim() : "";
-      const commands = Array.isArray(args.commands)
-        ? args.commands.filter((command): command is string => typeof command === "string" && command.trim().length > 0)
-        : [];
+      const parsed = parseHostedCreateJobInput(args);
+      if (!parsed.ok) return validationFailure(id, parsed.message);
 
-      if (!repo) return validationFailure(id, "repo is required");
-      if (!ref) return validationFailure(id, "ref is required");
-      if (commands.length === 0) return validationFailure(id, "commands must contain at least one command");
-      if (args.mode === "sync") {
-        return validationFailure(id, "hosted verification jobs must use mode='async'");
-      }
-
-      const target = await resolveHostedJobTarget(principal, repo);
+      const target = await resolveHostedJobTarget(principal, parsed.value.repo);
       const job = await repository.create(principal, {
         tenantId: target.tenantId,
         repositoryId: target.repositoryId,
         installationId: target.installationId,
-        ref,
-        workflow: hostedWorkflow({ ...args, commands }),
-        environmentName: typeof args.environment === "string" ? args.environment.trim() || null : null,
+        ref: parsed.value.ref,
+        workflow: parsed.value.workflow,
+        environmentName: parsed.value.environmentName,
         createdByClientId: principal.clientId ?? null,
       });
 
