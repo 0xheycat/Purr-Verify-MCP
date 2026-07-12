@@ -1,0 +1,166 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/hosted-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TenantType {
+  PERSONAL
+  ORGANIZATION
+}
+
+enum TenantRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+model User {
+  id              String             @id @default(cuid())
+  githubUserId    BigInt             @unique
+  githubLogin     String             @unique
+  email           String?
+  displayName     String?
+  avatarUrl       String?
+  memberships     TenantMembership[]
+  ownedJobs       VerificationJob[]  @relation("JobOwner")
+  sessions        UserSession[]
+  oauthAccessTokens OAuthAccessToken[]
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+}
+
+model Tenant {
+  id              String             @id @default(cuid())
+  type            TenantType
+  slug            String             @unique
+  displayName     String
+  memberships     TenantMembership[]
+  installations   GitHubInstallation[]
+  repositories    InstalledRepository[]
+  jobs            VerificationJob[]
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+}
+
+model TenantMembership {
+  tenantId        String
+  userId          String
+  role            TenantRole         @default(MEMBER)
+  tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@id([tenantId, userId])
+  @@index([userId])
+}
+
+model GitHubInstallation {
+  id                    String                @id @default(cuid())
+  githubInstallationId  BigInt                @unique
+  githubAccountId       BigInt
+  githubAccountLogin    String
+  tenantId              String
+  tenant                Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  repositories          InstalledRepository[]
+  jobs                  VerificationJob[]
+  suspendedAt           DateTime?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+
+  @@index([tenantId])
+}
+
+model InstalledRepository {
+  id                    String                @id @default(cuid())
+  githubRepositoryId    BigInt                @unique
+  ownerLogin            String
+  name                  String
+  fullName              String                @unique
+  defaultBranch         String
+  private               Boolean
+  tenantId              String
+  installationId        String
+  tenant                Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  installation          GitHubInstallation    @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  jobs                  VerificationJob[]
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+
+  @@index([tenantId])
+  @@index([installationId])
+}
+
+model VerificationJob {
+  id                    String                @id @default(cuid())
+  tenantId              String
+  ownerUserId           String
+  repositoryId          String
+  installationId        String
+  ref                    String
+  status                 JobStatus            @default(QUEUED)
+  workflow               Json
+  environmentName       String?
+  createdByClientId     String?
+  queuedAt               DateTime              @default(now())
+  startedAt              DateTime?
+  finishedAt             DateTime?
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+  tenant                 Tenant                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  owner                  User                  @relation("JobOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  repository             InstalledRepository   @relation(fields: [repositoryId], references: [id], onDelete: Restrict)
+  installation           GitHubInstallation    @relation(fields: [installationId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, status])
+  @@index([ownerUserId])
+  @@index([repositoryId])
+  @@index([installationId])
+}
+
+model UserSession {
+  id          String    @id @default(cuid())
+  tokenHash   String    @unique
+  userId      String
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model OAuthAccessToken {
+  id          String    @id @default(cuid())
+  tokenHash   String    @unique
+  userId      String
+  clientId    String
+  audience    String
+  scopes      String[]
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([clientId])
+  @@index([expiresAt])
+}

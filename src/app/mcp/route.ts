@@ -5,6 +5,7 @@
 import { NextRequest } from "next/server";
 import { handleMcp } from "@/lib/verify/mcp";
 import { checkAuth } from "@/lib/verify/auth";
+import { handleHostedMcpJobRead } from "@/lib/verify/hosted-mcp-jobs";
 import { mcpResourceUrl, oauthAuthenticateHeaders, oauthResourceMetadataUrl } from "@/lib/verify/oauth-metadata";
 import {
   READ_OPERATING_GUIDE_TOOL,
@@ -195,6 +196,13 @@ export async function POST(req: NextRequest) {
   if (messages.length === 1 && isLocalDebugCall(messages[0])) {
     const result = await debugToolResponse(req, messages[0], requestId);
     return Response.json(result, { status: 200, headers: { "x-purr-request-id": requestId, "cache-control": "no-store" } });
+  }
+
+  if (messages.length === 1) {
+    const hostedResult = await handleHostedMcpJobRead(req, messages[0]);
+    if (hostedResult) {
+      return Response.json(hostedResult, { status: 200, headers: { "x-purr-request-id": requestId, "cache-control": "no-store" } });
+    }
   }
 
   if (requiresCheck(body)) {
