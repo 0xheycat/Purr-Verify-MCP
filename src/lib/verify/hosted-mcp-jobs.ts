@@ -5,6 +5,7 @@ import { resolveHostedJobTarget } from "../jobs/hosted-job-target";
 import { isHostedMode } from "../runtime/deployment-mode";
 import { TenantAccessError } from "../tenancy/authorization";
 import { resolveHostedPrincipalFromRequest } from "../tenancy/hosted-request-context";
+import { validateCommands } from "./allowlist";
 
 interface HostedMcpMessage {
   id?: string | number | null;
@@ -61,17 +62,13 @@ function validationFailure(id: string | number | null, message: string) {
 export function parseHostedCreateJobInput(args: Record<string, unknown>): HostedCreateJobParseResult {
   const repo = typeof args.repo === "string" ? args.repo.trim() : "";
   const ref = typeof args.ref === "string" ? args.ref.trim() : "";
-  const commands = Array.isArray(args.commands)
-    ? args.commands
-      .filter((command): command is string => typeof command === "string")
-      .map((command) => command.trim())
-      .filter((command) => command.length > 0)
-    : [];
 
   if (!repo) return { ok: false, message: "repo is required" };
   if (!ref) return { ok: false, message: "ref is required" };
-  if (commands.length === 0) {
-    return { ok: false, message: "commands must contain at least one command" };
+
+  const commandValidation = validateCommands(args.commands);
+  if (!commandValidation.ok || !commandValidation.commands) {
+    return { ok: false, message: commandValidation.reason || "commands are invalid" };
   }
   if (args.mode === "sync") {
     return { ok: false, message: "hosted verification jobs must use mode='async'" };
@@ -88,7 +85,7 @@ export function parseHostedCreateJobInput(args: Record<string, unknown>): Hosted
       ref,
       workflow: {
         version: 1,
-        commands,
+        commands: commandValidation.commands,
         continueOnError: args.continue_on_error === true,
         metadata,
         expectedHead: typeof args.expected_head === "string" ? args.expected_head.trim() || null : null,
