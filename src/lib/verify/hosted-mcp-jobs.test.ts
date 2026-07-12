@@ -10,7 +10,7 @@ describe("parseHostedCreateJobInput", () => {
       commands: [" bun install ", "bun run test"],
       continue_on_error: true,
       metadata: { source: "mcp" },
-      expected_head: " abc123 ",
+      expected_head: " abc1234 ",
       environment: " preview ",
     });
 
@@ -24,7 +24,7 @@ describe("parseHostedCreateJobInput", () => {
           commands: ["bun install", "bun run test"],
           continueOnError: true,
           metadata: { source: "mcp" },
-          expectedHead: "abc123",
+          expectedHead: "abc1234",
           mode: "async",
         },
         environmentName: "preview",
@@ -109,5 +109,47 @@ describe("parseHostedCreateJobInput", () => {
         environmentName: null,
       },
     });
+  });
+
+  test("rejects unsafe or oversized refs", () => {
+    expect(parseHostedCreateJobInput({
+      repo: "0xheycat/example",
+      ref: "feature/../main",
+      commands: ["bun test"],
+    })).toEqual({ ok: false, message: "ref contains unsupported characters" });
+
+    expect(parseHostedCreateJobInput({
+      repo: "0xheycat/example",
+      ref: "a".repeat(256),
+      commands: ["bun test"],
+    })).toEqual({ ok: false, message: "ref is too long (max 255 characters)" });
+  });
+
+  test("validates expected head and environment names", () => {
+    expect(parseHostedCreateJobInput({
+      repo: "0xheycat/example",
+      ref: "main",
+      commands: ["bun test"],
+      expected_head: "not-a-sha",
+    })).toEqual({
+      ok: false,
+      message: "expected_head must be a 7 to 40 character hexadecimal commit SHA",
+    });
+
+    expect(parseHostedCreateJobInput({
+      repo: "0xheycat/example",
+      ref: "main",
+      commands: ["bun test"],
+      environment: "preview environment",
+    })).toEqual({ ok: false, message: "environment contains unsupported characters" });
+  });
+
+  test("rejects oversized metadata", () => {
+    expect(parseHostedCreateJobInput({
+      repo: "0xheycat/example",
+      ref: "main",
+      commands: ["bun test"],
+      metadata: { payload: "x".repeat(16 * 1024) },
+    })).toEqual({ ok: false, message: "metadata is too large (max 16384 bytes)" });
   });
 });
