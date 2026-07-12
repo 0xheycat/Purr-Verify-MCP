@@ -34,6 +34,12 @@ export type HostedCreateJobParseResult =
   | { ok: true; value: HostedCreateJobInput }
   | { ok: false; message: string };
 
+const MAX_REF_LENGTH = 255;
+const MAX_ENVIRONMENT_NAME_LENGTH = 64;
+const MAX_METADATA_BYTES = 16 * 1024;
+const EXPECTED_HEAD_PATTERN = /^[0-9a-f]{7,40}$/i;
+const ENVIRONMENT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
 function rpcError(id: string | number | null, code: number, message: string) {
   return { jsonrpc: "2.0", id, error: { code, message } };
 }
@@ -65,6 +71,12 @@ export function parseHostedCreateJobInput(args: Record<string, unknown>): Hosted
 
   if (!repo) return { ok: false, message: "repo is required" };
   if (!ref) return { ok: false, message: "ref is required" };
+  if (ref.length > MAX_REF_LENGTH) {
+    return { ok: false, message: `ref is too long (max ${MAX_REF_LENGTH} characters)` };
+  }
+  if (ref.startsWith("-") || ref.includes("..") || /[~^:?*[\\\s]/.test(ref)) {
+    return { ok: false, message: "ref contains unsupported characters" };
+  }
 
   const commandValidation = validateCommands(args.commands);
   if (!commandValidation.ok || !commandValidation.commands) {
@@ -77,6 +89,28 @@ export function parseHostedCreateJobInput(args: Record<string, unknown>): Hosted
   const metadata = typeof args.metadata === "object" && args.metadata !== null && !Array.isArray(args.metadata)
     ? args.metadata as Record<string, unknown>
     : {};
+  let metadataJson: string;
+  try {
+    metadataJson = JSON.stringify(metadata);
+  } catch {
+    return { ok: false, message: "metadata must be JSON serializable" };
+  }
+  if (Buffer.byteLength(metadataJson, "utf8") > MAX_METADATA_BYTES) {
+    return { ok: false, message: `metadata is too large (max ${MAX_METADATA_BYTES} bytes)` };
+  }
+
+  const expectedHead = typeof args.expected_head === "string" ? args.expected_head.trim() : "";
+  if (expectedHead && !EXPECTED_HEAD_PATTERN.test(expectedHead)) {
+    return { ok: false, message: "expected_head must be a 7 to 40 character hexadecimal commit SHA" };
+  }
+
+  const environmentName = typeof args.environment === "string" ? args.environment.trim() : "";
+  if (environmentName.length > MAX_ENVIRONMENT_NAME_LENGTH) {
+    return { ok: false, message: `environment is too long (max ${MAX_ENVIRONMENT_NAME_LENGTH} characters)` };
+  }
+  if (environmentName && !ENVIRONMENT_NAME_PATTERN.test(environmentName)) {
+    return { ok: false, message: "environment contains unsupported characters" };
+  }
 
   return {
     ok: true,
@@ -88,10 +122,10 @@ export function parseHostedCreateJobInput(args: Record<string, unknown>): Hosted
         commands: commandValidation.commands,
         continueOnError: args.continue_on_error === true,
         metadata,
-        expectedHead: typeof args.expected_head === "string" ? args.expected_head.trim() || null : null,
+        expectedHead: expectedHead || null,
         mode: "async",
       },
-      environmentName: typeof args.environment === "string" ? args.environment.trim() || null : null,
+      environmentName: environmentName || null,
     },
   };
 }
