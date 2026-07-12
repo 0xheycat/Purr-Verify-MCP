@@ -7,7 +7,7 @@ describe("parseHostedCreateJobInput", () => {
     const result = parseHostedCreateJobInput({
       repo: " 0xheycat/example ",
       ref: " feature/test ",
-      commands: [" bun install ", "", 42, "bun run test"],
+      commands: [" bun install ", "bun run test"],
       continue_on_error: true,
       metadata: { source: "mcp" },
       expected_head: " abc123 ",
@@ -44,7 +44,7 @@ describe("parseHostedCreateJobInput", () => {
     });
   });
 
-  test("requires repository, ref, and at least one non-empty command", () => {
+  test("requires repository, ref, and a valid command array", () => {
     expect(parseHostedCreateJobInput({ ref: "main", commands: ["bun test"] })).toEqual({
       ok: false,
       message: "repo is required",
@@ -59,7 +59,27 @@ describe("parseHostedCreateJobInput", () => {
       commands: [" ", 42],
     })).toEqual({
       ok: false,
-      message: "commands must contain at least one command",
+      message: "command #1 rejected: empty command",
+    });
+  });
+
+  test("rejects commands outside the verification allowlist", () => {
+    expect(parseHostedCreateJobInput({
+      repo: "0xheycat/example",
+      ref: "main",
+      commands: ["rm -rf ."],
+    })).toEqual({
+      ok: false,
+      message: "command #1 rejected: command contains forbidden token: rm",
+    });
+
+    expect(parseHostedCreateJobInput({
+      repo: "0xheycat/example",
+      ref: "main",
+      commands: Array.from({ length: 51 }, () => "bun test"),
+    })).toEqual({
+      ok: false,
+      message: "too many commands (max 50)",
     });
   });
 
