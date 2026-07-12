@@ -52,11 +52,13 @@ function principal(
   userId: string,
   tenantId: string,
   role: "viewer" | "member" | "admin" = "member",
+  clientId?: string,
 ): TenantPrincipal {
   return {
     userId,
     tenantIds: new Set([tenantId]),
     rolesByTenant: new Map([[tenantId, role]]),
+    ...(clientId ? { clientId } : {}),
   };
 }
 
@@ -97,6 +99,43 @@ describe("HostedJobRepository", () => {
     await expect(
       repository.create(principal("viewer-a", "tenant-a", "viewer"), input("tenant-a")),
     ).rejects.toBeInstanceOf(TenantAccessError);
+  });
+
+  test("persists owner, OAuth client, target, and normalized workflow fields", async () => {
+    const repository = new HostedJobRepository(new MemoryHostedJobStore());
+    const workflow = {
+      version: 1 as const,
+      commands: ["bun test"],
+      continueOnError: true,
+      metadata: { source: "mcp" },
+      expectedHead: "abc123",
+      mode: "async" as const,
+    };
+
+    const job = await repository.create(
+      principal("user-a", "tenant-a", "member", "oauth-client-a"),
+      {
+        tenantId: "tenant-a",
+        repositoryId: "repo-a",
+        installationId: "installation-a",
+        ref: "feature/persistence",
+        workflow,
+        environmentName: "preview",
+        createdByClientId: "oauth-client-a",
+      },
+    );
+
+    expect(job).toMatchObject({
+      tenantId: "tenant-a",
+      ownerUserId: "user-a",
+      repositoryId: "repo-a",
+      installationId: "installation-a",
+      ref: "feature/persistence",
+      workflow,
+      environmentName: "preview",
+      createdByClientId: "oauth-client-a",
+      status: "queued",
+    });
   });
 
   test("prevents members mutating another user's job", async () => {
