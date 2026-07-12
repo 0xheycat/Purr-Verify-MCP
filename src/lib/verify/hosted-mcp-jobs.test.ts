@@ -1,0 +1,93 @@
+import { describe, expect, test } from "bun:test";
+
+import { parseHostedCreateJobInput } from "./hosted-mcp-jobs";
+
+describe("parseHostedCreateJobInput", () => {
+  test("maps a valid hosted request into an async workflow", () => {
+    const result = parseHostedCreateJobInput({
+      repo: " 0xheycat/example ",
+      ref: " feature/test ",
+      commands: [" bun install ", "", 42, "bun run test"],
+      continue_on_error: true,
+      metadata: { source: "mcp" },
+      expected_head: " abc123 ",
+      environment: " preview ",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        repo: "0xheycat/example",
+        ref: "feature/test",
+        workflow: {
+          version: 1,
+          commands: ["bun install", "bun run test"],
+          continueOnError: true,
+          metadata: { source: "mcp" },
+          expectedHead: "abc123",
+          mode: "async",
+        },
+        environmentName: "preview",
+      },
+    });
+  });
+
+  test("rejects sync mode", () => {
+    expect(parseHostedCreateJobInput({
+      repo: "0xheycat/example",
+      ref: "main",
+      commands: ["bun test"],
+      mode: "sync",
+    })).toEqual({
+      ok: false,
+      message: "hosted verification jobs must use mode='async'",
+    });
+  });
+
+  test("requires repository, ref, and at least one non-empty command", () => {
+    expect(parseHostedCreateJobInput({ ref: "main", commands: ["bun test"] })).toEqual({
+      ok: false,
+      message: "repo is required",
+    });
+    expect(parseHostedCreateJobInput({ repo: "0xheycat/example", commands: ["bun test"] })).toEqual({
+      ok: false,
+      message: "ref is required",
+    });
+    expect(parseHostedCreateJobInput({
+      repo: "0xheycat/example",
+      ref: "main",
+      commands: [" ", 42],
+    })).toEqual({
+      ok: false,
+      message: "commands must contain at least one command",
+    });
+  });
+
+  test("drops invalid optional object values instead of persisting them", () => {
+    const result = parseHostedCreateJobInput({
+      repo: "0xheycat/example",
+      ref: "main",
+      commands: ["bun test"],
+      metadata: ["not-an-object-map"],
+      expected_head: " ",
+      environment: " ",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        repo: "0xheycat/example",
+        ref: "main",
+        workflow: {
+          version: 1,
+          commands: ["bun test"],
+          continueOnError: false,
+          metadata: {},
+          expectedHead: null,
+          mode: "async",
+        },
+        environmentName: null,
+      },
+    });
+  });
+});
