@@ -109,7 +109,6 @@ beforeAll(async () => {
     .export({ type: "pkcs8", format: "pem" })
     .toString();
 
-  process.env.NODE_ENV = "test";
   process.env.AUTH_MODE = "server_token";
   delete process.env.VERIFY_TOKEN;
   process.env.VERIFY_DATA_DIR = tempDir;
