@@ -269,7 +269,7 @@ describe("OAuth authorization-code flow", () => {
     });
   });
 
-  test("rejects a missing resource at token exchange", async () => {
+  test("uses the signed code resource when token exchange omits resource", async () => {
     const code = await issueAuthorizationCode();
     const response = await handleToken(
       formRequest("/oauth/exchange", {
