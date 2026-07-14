@@ -40,7 +40,7 @@ export function dcrEnabled(): boolean {
   return boolEnv("OAUTH_DCR_ENABLED", false);
 }
 
-function allowedRedirectUris(): string[] {
+export function allowedRedirectUris(): string[] {
   return [
     ...new Set(
       splitList(
@@ -321,12 +321,21 @@ export function rateLimit(
 
 export function configurationFailure(req: NextRequest): Response | null {
   const status = oauthConfigurationStatus(req);
-  if (status.ok) return null;
+  const reasons = [...status.reasons];
+  if (!dcrEnabled() && allowedRedirectUris().length === 0) {
+    reasons.push(
+      "OAUTH_ALLOWED_REDIRECT_URIS is required when dynamic registration is disabled"
+    );
+  }
+  if (allowedRedirectUris().some((uri) => !validRedirectUri(uri))) {
+    reasons.push("OAUTH_ALLOWED_REDIRECT_URIS contains an invalid redirect URI");
+  }
+  if (status.ok && reasons.length === 0) return null;
   return oauthJson(
     {
       error: "server_error",
       error_description: "OAuth server is not configured",
-      details: status.reasons,
+      details: reasons,
     },
     503
   );
@@ -360,12 +369,12 @@ export function oauthAuthorizationServerMetadata(
     jwks_uri: `${issuer}/oauth/keys`,
     response_types_supported: ["code"],
     response_modes_supported: ["query"],
-    grant_types_supported: ["authorization_code", "refresh_token"],
+    grant_types_supported: ["authorization_code"],
     code_challenge_methods_supported: ["S256"],
     token_endpoint_auth_methods_supported: ["none"],
     scopes_supported: supportedOauthScopes(),
     resource_indicators_supported: true,
     authorization_response_iss_parameter_supported: true,
-    service_documentation: `${oauthPublicBaseUrl(req)}/docs/chatgpt-oauth`,
+    service_documentation: `${oauthPublicBaseUrl(req)}/`,
   };
 }
