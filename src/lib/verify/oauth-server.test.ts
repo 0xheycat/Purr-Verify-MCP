@@ -288,6 +288,33 @@ describe("OAuth authorization-code flow", () => {
     ).toMatchObject({ ok: true });
   });
 
+  test("rejects an explicit wrong token resource without consuming the code", async () => {
+    const code = await issueAuthorizationCode();
+    const wrong = await handleToken(
+      formRequest("/oauth/exchange", {
+        grant_type: "authorization_code",
+        code,
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT,
+        code_verifier: VERIFIER,
+        resource: `${ORIGIN}/api/mcp`,
+      })
+    );
+    expect(wrong.status).toBe(400);
+    expect(await wrong.json()).toMatchObject({ error: "invalid_target" });
+
+    const retry = await handleToken(
+      formRequest("/oauth/exchange", {
+        grant_type: "authorization_code",
+        code,
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT,
+        code_verifier: VERIFIER,
+      })
+    );
+    expect(retry.status).toBe(200);
+  });
+
   test("rejects tampered signatures and unknown key ids", async () => {
     const issued = await exchangeAuthorizationCode();
     const parts = issued.access_token!.split(".");
