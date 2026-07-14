@@ -94,29 +94,30 @@ function sha256Base64url(value: string): string {
   return createHash("sha256").update(value).digest("base64url");
 }
 
-function hmacBase64url(value: string, secret: string): string {
-  return createHmac("sha256", secret).update(value).digest("base64url");
-}
-
 function signPayload(payload: Record<string, unknown>): string {
-  const secret = jwtSecret();
-  if (!secret) throw new Error("OAUTH_JWT_SECRET or VERIFY_TOKEN is required");
-  const header = { alg: "HS256", typ: "JWT" };
+  const key = getOAuthSigningKey();
+  const header = { alg: oauthSigningAlgorithm(), typ: "JWT", kid: key.kid };
   const unsigned = `${jsonBase64url(header)}.${jsonBase64url(payload)}`;
-  return `${unsigned}.${hmacBase64url(unsigned, secret)}`;
+  return `${unsigned}.${signEd25519(unsigned).toString("base64url")}`;
 }
 
 function decodeSignedPayload(token: string): { ok: boolean; reason?: string; payload?: Record<string, unknown> } {
-  const secret = jwtSecret();
-  if (!secret) return { ok: false, reason: "missing_jwt_secret" };
   const parts = token.split(".");
   if (parts.length !== 3) return { ok: false, reason: "malformed_token" };
   const [encodedHeader, encodedPayload, signature] = parts;
   try {
-    const header = JSON.parse(Buffer.from(encodedHeader, "base64url").toString("utf8")) as { alg?: string };
-    if (header.alg !== "HS256") return { ok: false, reason: "unsupported_alg" };
-    const expected = hmacBase64url(`${encodedHeader}.${encodedPayload}`, secret);
-    if (!safeEqual(signature, expected)) return { ok: false, reason: "bad_signature" };
+    const header = JSON.parse(Buffer.from(encodedHeader, "base64url").toString("utf8")) as {
+      alg?: string;
+      kid?: string;
+    };
+    if (header.alg !== oauthSigningAlgorithm()) return { ok: false, reason: "unsupported_alg" };
+    if (!header.kid) return { ok: false, reason: "missing_kid" };
+    const valid = verifyEd25519(
+      `${encodedHeader}.${encodedPayload}`,
+      Buffer.from(signature, "base64url"),
+      header.kid
+    );
+    if (!valid) return { ok: false, reason: "bad_signature_or_unknown_kid" };
     const payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as Record<string, unknown>;
     return { ok: true, payload };
   } catch {
