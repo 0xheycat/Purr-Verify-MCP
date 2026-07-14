@@ -258,7 +258,7 @@ export type RotateRefreshCredentialResult =
 export async function rotateRefreshCredential(input: {
   credential: string;
   clientId: string;
-  resource: string;
+  resource?: string;
   requestedScope?: string;
   expiresAtSeconds: number;
 }): Promise<RotateRefreshCredentialResult> {
