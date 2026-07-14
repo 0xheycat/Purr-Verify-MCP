@@ -39,6 +39,7 @@ Legacy `VERIFY_TOKEN` and `github_passthrough` credentials retain their existing
 - Access tokens are signed with Ed25519/EdDSA and include issuer, subject, audience, client, scope, `jti`, `iat`, and `exp`.
 - Refresh credentials are opaque random values. Raw values are returned to the client once and are never written to disk.
 - Refresh rotation and replay-family revocation are serialized and persisted under `VERIFY_DATA_DIR/oauth/state.json`.
+- Prisma models are present for the next migration step: shared transactional authorization-code, refresh-grant, dynamic-client, and audit-event storage.
 
 ## Production configuration
 
@@ -53,9 +54,11 @@ A production deployment requires:
 
 `OAUTH_PUBLIC_KEY` may be supplied as an integrity check. Previous public keys can remain available during key rotation through `OAUTH_VERIFICATION_PUBLIC_KEYS`.
 
+`OAUTH_STORAGE_MODE=json` is the default. `OAUTH_STORAGE_MODE=prisma` is reserved for the shared database adapter after the Prisma tables are migrated and wired.
+
 ## Production limitations
 
-The current durable OAuth state uses a local JSON file and a process-level serialization gate. It supports one active application instance with a persistent local volume. It is not safe for multiple application instances sharing the same file without an external transactional lock.
+The current runtime durable OAuth state uses a local JSON file and a process-level serialization gate. It supports one active application instance with a persistent local volume. It is not safe for multiple application instances sharing the same file without an external transactional lock. The database schema for the multi-instance adapter is present, but the runtime adapter must be wired before horizontal scaling.
 
 Dynamic client registration remains process-local. A hosted public deployment still requires shared transactional persistence, tenant ownership, durable dynamic clients and consent, GitHub App repository authorization, rate limits, audit records, and isolated workers.
 
