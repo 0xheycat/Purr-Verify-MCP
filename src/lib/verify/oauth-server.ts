@@ -522,17 +522,16 @@ async function handleAuthorizationCodeGrant(
       400
     );
   }
-  const requestResource = params.get("resource") || "";
+  const requestResource = params.get("resource");
   if (
-    !requestResource ||
-    requestResource !== entry.resource ||
-    requestResource !== oauthResourceUrl(req)
+    entry.resource !== oauthResourceUrl(req) ||
+    (requestResource !== null && requestResource !== entry.resource)
   ) {
     return oauthJson(
       {
         error: "invalid_target",
         error_description:
-          "resource is required and must match the authorized MCP resource",
+          "resource must match the authorized MCP resource when supplied",
       },
       400
     );
