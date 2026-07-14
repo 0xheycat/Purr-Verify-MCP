@@ -196,6 +196,51 @@ export async function issueRefreshCredential(input: {
   });
 }
 
+export async function consumeCodeAndIssueRefreshCredential(input: {
+  code: string;
+  codeExpiresAtSeconds: number;
+  clientId: string;
+  subject: string;
+  scope: string;
+  resource: string;
+  refreshExpiresAtSeconds: number;
+}): Promise<
+  | { ok: true; credential: string; record: OAuthRefreshGrantRecord }
+  | { ok: false; reason: "replayed" }
+> {
+  return serialized(async () => {
+    const state = await readState();
+    cleanupState(state);
+    const codeHash = valueHash(input.code);
+    if (state.consumedAuthorizationCodes[codeHash]) {
+      return { ok: false, reason: "replayed" };
+    }
+
+    const nowIso = new Date().toISOString();
+    const credential = randomBytes(32).toString("base64url");
+    const credentialHash = valueHash(credential);
+    const record: OAuthRefreshGrantRecord = {
+      credentialHash,
+      familyId: randomBytes(16).toString("base64url"),
+      clientId: input.clientId,
+      subject: input.subject,
+      scope: input.scope,
+      resource: input.resource,
+      createdAt: nowIso,
+      expiresAt: new Date(input.refreshExpiresAtSeconds * 1000).toISOString(),
+      status: "active",
+    };
+    state.consumedAuthorizationCodes[codeHash] = {
+      codeHash,
+      expiresAt: new Date(input.codeExpiresAtSeconds * 1000).toISOString(),
+      consumedAt: nowIso,
+    };
+    state.refreshGrants[credentialHash] = record;
+    await writeState(state);
+    return { ok: true, credential, record };
+  });
+}
+
 export type RotateRefreshCredentialResult =
   | { ok: true; credential: string; record: OAuthRefreshGrantRecord }
   | {
