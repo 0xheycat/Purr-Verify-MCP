@@ -17,7 +17,13 @@ export async function GET() {
   const cfg = getConfig();
   const configured = isConfigured();
   const tools = await runnerTools();
-  const body: HealthResponse = {
+  const body: HealthResponse & {
+    oauthStorage: {
+      mode: "json" | "prisma";
+      multiInstanceSafe: boolean;
+      notes: string[];
+    };
+  } = {
     status: "ok",
     service: "purr-verify-mcp",
     time: new Date().toISOString(),
@@ -29,6 +35,17 @@ export async function GET() {
     allowAllRepos: cfg.allowAllRepos,
     authMode: cfg.authMode,
     githubTokenSource: githubTokenSource(),
+    oauthStorage: {
+      mode: cfg.oauthStorageMode,
+      multiInstanceSafe: cfg.oauthStorageMode === "prisma",
+      notes:
+        cfg.oauthStorageMode === "prisma"
+          ? ["Shared transactional OAuth storage is selected."]
+          : [
+              "Local JSON OAuth storage supports one active instance only.",
+              "Set OAUTH_STORAGE_MODE=prisma after deploying and wiring the OAuth Prisma adapter.",
+            ],
+    },
     configured: configured.ok,
     backgroundJobsReliable: true,
     syncModeAvailable: true,
