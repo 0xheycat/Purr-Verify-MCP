@@ -17,7 +17,7 @@ const VERIFIER = "test-verifier";
 const CHALLENGE = createHash("sha256").update(VERIFIER).digest("base64url");
 
 function request(path: string, init?: RequestInit): NextRequest {
-  return new NextRequest(`${ORIGIN}${path}`, init);
+  return new NextRequest(`${ORIGIN}${path}`, init ? { ...init, signal: undefined } : undefined);
 }
 
 function authorizeParams(overrides: Record<string, string> = {}): URLSearchParams {
