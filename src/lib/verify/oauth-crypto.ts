@@ -8,7 +8,6 @@ import {
   type KeyObject,
 } from "node:crypto";
 import { NextRequest } from "next/server";
-import { isRefreshFamilyRevoked } from "./oauth-store";
 
 const DEFAULT_SCOPES = ["verify:read", "verify:run", "verify:share"];
 
@@ -22,7 +21,6 @@ export interface OAuthAccessTokenClaims extends Record<string, unknown> {
   nbf: number;
   exp: number;
   jti: string;
-  fid: string;
 }
 
 interface OAuthKeyMaterial {
@@ -47,11 +45,15 @@ function requestOrigin(req: NextRequest): string {
 }
 
 export function oauthPublicBaseUrl(req: NextRequest): string {
-  return normalizeNoTrailingSlash(process.env.PUBLIC_BASE_URL || requestOrigin(req));
+  return normalizeNoTrailingSlash(
+    process.env.PUBLIC_BASE_URL || requestOrigin(req)
+  );
 }
 
 export function oauthIssuer(req: NextRequest): string {
-  return normalizeNoTrailingSlash(process.env.OAUTH_ISSUER || oauthPublicBaseUrl(req));
+  return normalizeNoTrailingSlash(
+    process.env.OAUTH_ISSUER || oauthPublicBaseUrl(req)
+  );
 }
 
 export function oauthResourceUrl(req: NextRequest): string {
@@ -66,16 +68,11 @@ export function supportedOauthScopes(): string[] {
 }
 
 export function oauthTokenTtlSeconds(): number {
-  const parsed = Number.parseInt(process.env.OAUTH_TOKEN_TTL_SECONDS || "900", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 900;
-}
-
-export function oauthRefreshTokenTtlSeconds(): number {
   const parsed = Number.parseInt(
-    process.env.OAUTH_REFRESH_TOKEN_TTL_SECONDS || "2592000",
+    process.env.OAUTH_TOKEN_TTL_SECONDS || "3600",
     10
   );
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 2_592_000;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 3600;
 }
 
 export function oauthSubject(): string {
@@ -149,7 +146,10 @@ export function oauthConfigurationStatus(
   if (process.env.NODE_ENV === "production" && !process.env.OAUTH_ISSUER) {
     reasons.push("OAUTH_ISSUER is required in production");
   }
-  if (process.env.NODE_ENV === "production" && !process.env.OAUTH_RESOURCE_URL) {
+  if (
+    process.env.NODE_ENV === "production" &&
+    !process.env.OAUTH_RESOURCE_URL
+  ) {
     reasons.push("OAUTH_RESOURCE_URL is required in production");
   }
   if (!validHttpsUrl(oauthIssuer(req))) {
@@ -262,16 +262,8 @@ export async function verifyOAuthAccessToken(
   if (typeof payload.iat !== "number" || payload.iat > now + 30) {
     return { ok: false, reason: "bad_issued_at" };
   }
-  if (
-    !payload.sub ||
-    !payload.client_id ||
-    !payload.jti ||
-    !payload.fid
-  ) {
+  if (!payload.sub || !payload.client_id || !payload.jti) {
     return { ok: false, reason: "missing_claims" };
-  }
-  if (await isRefreshFamilyRevoked(payload.fid)) {
-    return { ok: false, reason: "token_family_revoked" };
   }
 
   const scopes = splitOAuthList(
@@ -310,7 +302,6 @@ export function createAccessTokenClaims(input: {
   scope: string;
   resource: string;
   subject: string;
-  familyId: string;
 }): OAuthAccessTokenClaims {
   const now = Math.floor(Date.now() / 1000);
   return {
@@ -323,6 +314,5 @@ export function createAccessTokenClaims(input: {
     nbf: now - 5,
     exp: now + oauthTokenTtlSeconds(),
     jti: randomUUID(),
-    fid: input.familyId,
   };
 }
