@@ -167,7 +167,7 @@ describe("OAuth authorization-code flow", () => {
 
     const header = JSON.parse(
       Buffer.from(firstBody.access_token!.split(".")[0], "base64url").toString("utf8")
-    ) as { alg?: string; kid?: string };
+    ) as { alg?: string; typ?: string; kid?: string };
     expect(header).toEqual({ alg: "EdDSA", typ: "JWT", kid: "test-ed25519-key" });
     expect(verifyOAuthAccessToken(firstBody.access_token!, request("/mcp"))).toMatchObject({ ok: true });
 
