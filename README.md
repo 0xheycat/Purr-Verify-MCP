@@ -94,9 +94,11 @@ flowchart LR
 
 ```text
 MCP URL:  https://<your-host>/mcp
-Auth:     Bearer token
-Token:    <your GitHub PAT>     # in github_passthrough mode
+Auth:     OAuth 2.1 authorization code + PKCE
+Scopes:   verify:read verify:run verify:share
 ```
+
+For ChatGPT, use the production OAuth setup in [`docs/chatgpt-oauth.md`](docs/chatgpt-oauth.md). Legacy bearer modes remain available for server-to-server clients.
 
 > Don't have a host yet? See [Deploy (self-hosting)](#deploy-self-hosting) — there is no shared public URL; you run your own instance.
 
@@ -107,7 +109,7 @@ Call `health_check`. You should see the runtime versions and — importantly —
 ```json
 {
   "status": "ok",
-  "authMode": "github_passthrough",
+  "authMode": "server_token",
   "nodeVersion": "v26.3.0",
   "bunVersion": "1.3.14",
   "workspaceRoot": "/tmp/purr-verify-workspaces"
