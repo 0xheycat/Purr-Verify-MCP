@@ -26,6 +26,7 @@ function boolEnv(name: string): boolean {
 }
 
 export type AuthMode = "server_token" | "github_passthrough";
+export type OAuthStorageMode = "json" | "prisma";
 
 export interface VerifyConfig {
   verifyToken: string;
@@ -51,6 +52,7 @@ export interface VerifyConfig {
   toolchainCacheRoot: string;
   toolchainDefaultNode: string;
   toolchainDefaultBun: string;
+  oauthStorageMode: OAuthStorageMode;
 }
 
 function parseAuthMode(raw: string | undefined): AuthMode {
@@ -60,6 +62,12 @@ function parseAuthMode(raw: string | undefined): AuthMode {
   }
   // Default + explicit server_token.
   return "server_token";
+}
+
+function parseOAuthStorageMode(raw: string | undefined): OAuthStorageMode {
+  const v = (raw || "").trim().toLowerCase();
+  if (v === "prisma" || v === "database" || v === "db") return "prisma";
+  return "json";
 }
 
 // Returns true if the given path lives inside a Next.js build output directory
@@ -133,6 +141,7 @@ export function getConfig(): VerifyConfig {
     toolchainCacheRoot: path.resolve(strEnv("TOOLCHAIN_CACHE_DIR", path.join(os.tmpdir(), "purr-verify-toolchains"))),
     toolchainDefaultNode: strEnv("TOOLCHAIN_DEFAULT_NODE", strEnv("DEFAULT_NODE_VERSION", "")),
     toolchainDefaultBun: strEnv("TOOLCHAIN_DEFAULT_BUN", strEnv("DEFAULT_BUN_VERSION", "")),
+    oauthStorageMode: parseOAuthStorageMode(process.env.OAUTH_STORAGE_MODE),
   };
 }
 
