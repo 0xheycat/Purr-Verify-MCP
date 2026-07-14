@@ -33,7 +33,9 @@ Before verification work:
 - Use sync mode only for a short single smoke command that is expected to finish quickly.
 - Retry transient read-only MCP transport errors, timeouts, HTTP 429, and HTTP 5xx at most five times in the current run with backoff of 2, 4, 8, 16, and 32 seconds. Use the official GitHub MCP as a read-only fallback when it is available and appropriate.
 - Do not submit an identical failed verification job repeatedly. Record the jobId, failing command, status, and failure summary; the next scheduled run must fix the source or test before creating a new job.
+- If health reports `commandTimeoutMs > jobTimeoutMs`, submit async jobs with explicit valid overrides such as `long_run=true`, `command_timeout_ms=600000`, and `job_timeout_ms=1800000`.
 - If Verify MCP remains unavailable during the current run, leave verification pending and end only that bounded run gracefully. After two consecutive scheduled turns without Verify MCP, record `VERIFY_SKIPPED`; an implementation commit may proceed with explicit unverified evidence.
+- If a previously queued or running job disappears from the job store, record `VERIFY_RESULT_EVICTED` with its jobId and last observed state. Do not resubmit an identical job in the same run; treat it as verification unavailable for the scheduled-turn counter.
 - Never disable, pause, or terminate a recurring schedule because Verify MCP is unavailable or a verification job failed. The next scheduled run must resume from fresh repository state.
 - Summarize logs by default; provide full logs only when the user asks.
 - Do not use this server to mutate GitHub state.
