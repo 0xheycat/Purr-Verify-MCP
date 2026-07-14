@@ -1,17 +1,43 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  createSign,
+  createVerify,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+  type KeyObject,
+} from "node:crypto";
+import {
+  consumeAuthorizationCode,
+  createAuthorizationCode,
+  getOAuthClient,
+  registerOAuthClient,
+  type OAuthAuthorizationCodeRecord,
+  type OAuthClientRecord,
+} from "./oauth-store";
 
-const registeredClients = new Map<string, { redirect_uris: string[]; created_at: number }>();
+const DEFAULT_OAUTH_SCOPES = ["verify:read", "verify:run", "verify:share"];
+const PKCE_VALUE_RE = /^[A-Za-z0-9_-]{43,128}$/;
 
-interface AuthorizationCodePayload {
-  typ: "oauth_code";
+interface AccessTokenPayload extends Record<string, unknown> {
+  iss: string;
+  sub: string;
+  aud: string;
   client_id: string;
-  redirect_uri: string;
   scope: string;
-  resource: string;
-  code_challenge: string;
   iat: number;
+  nbf: number;
   exp: number;
+  jti: string;
+}
+
+interface OAuthKeyMaterial {
+  privateKey: KeyObject;
+  publicKey: KeyObject;
+  kid: string;
 }
 
 function splitList(raw = ""): string[] {
