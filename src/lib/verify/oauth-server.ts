@@ -536,8 +536,17 @@ async function handleAuthorizationCodeGrant(
       400
     );
   }
-  const consumed = await consumeAuthorizationCodeOnce(rawCode, entry.exp);
-  if (!consumed) {
+  const now = Math.floor(Date.now() / 1000);
+  const refresh = await consumeCodeAndIssueRefreshCredential({
+    code: rawCode,
+    codeExpiresAtSeconds: entry.exp,
+    clientId: entry.client_id,
+    subject: subject(),
+    scope: entry.scope,
+    resource: entry.resource,
+    refreshExpiresAtSeconds: now + refreshTtlSeconds(),
+  });
+  if (!refresh.ok) {
     return oauthJson(
       {
         error: "invalid_grant",
@@ -546,15 +555,6 @@ async function handleAuthorizationCodeGrant(
       400
     );
   }
-
-  const now = Math.floor(Date.now() / 1000);
-  const refresh = await issueRefreshCredential({
-    clientId: entry.client_id,
-    subject: subject(),
-    scope: entry.scope,
-    resource: entry.resource,
-    expiresAtSeconds: now + refreshTtlSeconds(),
-  });
   const access = issueAccessToken({
     req,
     clientId: entry.client_id,
