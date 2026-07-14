@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 const registeredClients = new Map<string, { redirect_uris: string[]; created_at: number }>();
+const consumedAuthorizationCodes = new Set<string>();
 
 interface AuthorizationCodePayload {
   typ: "oauth_code";
@@ -10,6 +11,7 @@ interface AuthorizationCodePayload {
   scope: string;
   resource: string;
   code_challenge: string;
+  jti: string;
   iat: number;
   exp: number;
 }
@@ -42,7 +44,17 @@ export function oauthResourceUrl(req: NextRequest): string {
 }
 
 export function supportedOauthScopes(): string[] {
-  return splitList(process.env.OAUTH_SCOPES_SUPPORTED || "verify:run verify:read repo read:user user:email");
+  return splitList(process.env.OAUTH_SCOPES_SUPPORTED || "verify:read verify:run verify:share");
+}
+
+export function normalizeRequestedOauthScope(raw: string): { ok: boolean; scope?: string; reason?: string } {
+  const supported = new Set(supportedOauthScopes());
+  const requested = splitList(raw || supportedOauthScopes().join(" "));
+  if (requested.length === 0) return { ok: false, reason: "scope is required" };
+  const unique = [...new Set(requested)];
+  const unsupported = unique.find((scope) => !supported.has(scope));
+  if (unsupported) return { ok: false, reason: `unsupported scope: ${unsupported}` };
+  return { ok: true, scope: unique.join(" ") };
 }
 
 function allowedRedirectUris(): string[] {
@@ -102,7 +114,6 @@ function decodeSignedPayload(token: string): { ok: boolean; reason?: string; pay
   if (!secret) return { ok: false, reason: "missing_jwt_secret" };
   const parts = token.split(".");
   if (parts.length !== 3) return { ok: false, reason: "malformed_token" };
-
   const [encodedHeader, encodedPayload, signature] = parts;
   try {
     const header = JSON.parse(Buffer.from(encodedHeader, "base64url").toString("utf8")) as { alg?: string };
@@ -116,10 +127,6 @@ function decodeSignedPayload(token: string): { ok: boolean; reason?: string; pay
   }
 }
 
-function signJwt(payload: Record<string, unknown>): string {
-  return signPayload(payload as unknown as Record<string, unknown>);
-}
-
 function signAuthorizationCode(payload: AuthorizationCodePayload): string {
   return signPayload(payload as unknown as Record<string, unknown>);
 }
@@ -131,7 +138,7 @@ function verifyAuthorizationCode(code: string): { ok: boolean; reason?: string; 
   const now = Math.floor(Date.now() / 1000);
   if (payload.typ !== "oauth_code") return { ok: false, reason: "wrong_code_type" };
   if (typeof payload.exp !== "number" || payload.exp <= now) return { ok: false, reason: "expired_code" };
-  if (!payload.client_id || !payload.redirect_uri || !payload.resource || !payload.code_challenge) {
+  if (!payload.client_id || !payload.redirect_uri || !payload.resource || !payload.code_challenge || !payload.jti) {
     return { ok: false, reason: "malformed_code" };
   }
   return { ok: true, payload: payload as AuthorizationCodePayload };
@@ -149,7 +156,17 @@ export function verifyOAuthAccessToken(token: string, req: NextRequest): { ok: b
   return { ok: true, payload };
 }
 
+function validRedirectUri(uri: string): boolean {
+  try {
+    const parsed = new URL(uri);
+    return parsed.protocol === "https:" && !parsed.username && !parsed.password && !parsed.hash;
+  } catch {
+    return false;
+  }
+}
+
 function isRedirectAllowed(clientId: string, redirectUri: string): boolean {
+  if (!validRedirectUri(redirectUri)) return false;
   const registered = registeredClients.get(clientId);
   if (registered?.redirect_uris.includes(redirectUri)) return true;
   if (clientId === defaultClientId()) {
@@ -160,20 +177,23 @@ function isRedirectAllowed(clientId: string, redirectUri: string): boolean {
   return false;
 }
 
-function validateAuthorizeParams(params: URLSearchParams, req: NextRequest): string {
+export function validateAuthorizeParams(params: URLSearchParams, req: NextRequest): string {
   const responseType = params.get("response_type");
   const clientId = params.get("client_id") || "";
   const redirectUri = params.get("redirect_uri") || "";
   const codeChallenge = params.get("code_challenge") || "";
   const codeChallengeMethod = params.get("code_challenge_method") || "";
-  const resource = params.get("resource") || oauthResourceUrl(req);
+  const resource = params.get("resource") || "";
+  const requestedScope = normalizeRequestedOauthScope(params.get("scope") || "");
   if (responseType !== "code") return "response_type must be code";
   if (!clientId) return "client_id is required";
   if (!redirectUri) return "redirect_uri is required";
   if (!isRedirectAllowed(clientId, redirectUri)) return "redirect_uri is not allowed for this client_id";
   if (!codeChallenge) return "code_challenge is required";
   if (codeChallengeMethod !== "S256") return "code_challenge_method must be S256";
+  if (!resource) return "resource is required";
   if (resource !== oauthResourceUrl(req)) return "resource does not match this MCP server";
+  if (!requestedScope.ok) return requestedScope.reason || "invalid scope";
   return "";
 }
 
@@ -183,14 +203,12 @@ function escapeHtml(value: string): string {
 
 function renderAuthorizePage(params: URLSearchParams, req: NextRequest, error = ""): string {
   const fields = ["response_type", "client_id", "redirect_uri", "scope", "state", "code_challenge", "code_challenge_method", "resource"];
-  const hidden = fields
-    .map((key) => `<input type="hidden" name="${key}" value="${escapeHtml(params.get(key) || (key === "resource" ? oauthResourceUrl(req) : ""))}">`)
-    .join("\n");
+  const hidden = fields.map((key) => `<input type="hidden" name="${key}" value="${escapeHtml(params.get(key) || "")}">`).join("\n");
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Purr Verify MCP OAuth</title><style>body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#09090b;color:#fafafa;display:grid;place-items:center;min-height:100vh;margin:0;padding:24px}main{width:min(440px,100%);background:#18181b;border:1px solid #3f3f46;border-radius:18px;padding:24px;box-shadow:0 18px 60px #0008}h1{font-size:20px;margin:0 0 8px}p{color:#d4d4d8;line-height:1.5}code{color:#fbbf24;word-break:break-all}input,button{width:100%;box-sizing:border-box;border-radius:10px;border:1px solid #52525b;background:#09090b;color:#fafafa;padding:12px;font-size:15px}button{margin-top:12px;background:#22c55e;border:0;font-weight:700;cursor:pointer}.err{color:#fca5a5}.muted{font-size:13px;color:#a1a1aa}</style></head><body><main><h1>Authorize Purr Verify MCP</h1><p>ChatGPT is requesting access to <code>${escapeHtml(oauthResourceUrl(req))}</code>.</p><p class="muted">Client: <code>${escapeHtml(params.get("client_id") || "")}</code><br>Scopes: <code>${escapeHtml(params.get("scope") || supportedOauthScopes().join(" "))}</code></p>${error ? `<p class="err">${escapeHtml(error)}</p>` : ""}<form method="post" action="/oauth/authorize">${hidden}<label>Owner approval code</label><input type="password" name="owner_code" autocomplete="current-password" required autofocus><button type="submit">Authorize ChatGPT</button></form></main></body></html>`;
 }
 
 function html(body: string, status = 200): Response {
-  return new Response(body, { status, headers: { "Content-Type": "text/html; charset=utf-8" } });
+  return new Response(body, { status, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
 }
 
 async function readOAuthParams(req: NextRequest): Promise<URLSearchParams> {
@@ -214,7 +232,6 @@ export function oauthAuthorizationServerMetadata(req: NextRequest): Record<strin
     authorization_endpoint: `${issuer}/oauth/authorize`,
     token_endpoint: `${issuer}/oauth/exchange`,
     registration_endpoint: `${issuer}/oauth/register`,
-    jwks_uri: `${issuer}/oauth/keys`,
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code"],
     code_challenge_methods_supported: ["S256"],
@@ -238,14 +255,17 @@ export async function handleAuthorize(req: NextRequest): Promise<Response> {
   if (!safeEqual(params.get("owner_code") || "", ownerCode())) {
     return html(renderAuthorizePage(params, req, "Invalid owner approval code."), 401);
   }
+  const normalizedScope = normalizeRequestedOauthScope(params.get("scope") || "");
+  if (!normalizedScope.ok || !normalizedScope.scope) return html(renderAuthorizePage(params, req, normalizedScope.reason || "Invalid scope"), 400);
   const now = Math.floor(Date.now() / 1000);
   const code = signAuthorizationCode({
     typ: "oauth_code",
     client_id: params.get("client_id") || "",
     redirect_uri: params.get("redirect_uri") || "",
-    scope: params.get("scope") || supportedOauthScopes().join(" "),
-    resource: params.get("resource") || oauthResourceUrl(req),
+    scope: normalizedScope.scope,
+    resource: params.get("resource") || "",
     code_challenge: params.get("code_challenge") || "",
+    jti: randomBytes(16).toString("base64url"),
     iat: now,
     exp: now + 5 * 60,
   });
@@ -260,11 +280,16 @@ export async function handleToken(req: NextRequest): Promise<Response> {
   if (req.method !== "POST") return NextResponse.json({ error: "method_not_allowed" }, { status: 405 });
   const params = await readOAuthParams(req);
   if (params.get("grant_type") !== "authorization_code") return NextResponse.json({ error: "unsupported_grant_type" }, { status: 400 });
-  const verifiedCode = verifyAuthorizationCode(params.get("code") || "");
+  const rawCode = params.get("code") || "";
+  const verifiedCode = verifyAuthorizationCode(rawCode);
   if (!verifiedCode.ok || !verifiedCode.payload) {
     return NextResponse.json({ error: "invalid_grant", error_description: verifiedCode.reason || "Invalid code" }, { status: 400 });
   }
   const entry = verifiedCode.payload;
+  const codeKey = createHash("sha256").update(rawCode).digest("hex");
+  if (consumedAuthorizationCodes.has(codeKey)) {
+    return NextResponse.json({ error: "invalid_grant", error_description: "Authorization code has already been used" }, { status: 400 });
+  }
   const requestClientId = params.get("client_id") || entry.client_id;
   const requestRedirectUri = params.get("redirect_uri") || entry.redirect_uri;
   if (requestClientId !== entry.client_id || requestRedirectUri !== entry.redirect_uri) {
@@ -274,20 +299,26 @@ export async function handleToken(req: NextRequest): Promise<Response> {
   if (!verifier || sha256Base64url(verifier) !== entry.code_challenge) {
     return NextResponse.json({ error: "invalid_grant", error_description: "PKCE verification failed" }, { status: 400 });
   }
+  const requestResource = params.get("resource") || "";
+  if (!requestResource || requestResource !== entry.resource || requestResource !== oauthResourceUrl(req)) {
+    return NextResponse.json({ error: "invalid_target", error_description: "resource is required and must match the authorized MCP resource" }, { status: 400 });
+  }
+  consumedAuthorizationCodes.add(codeKey);
   const now = Math.floor(Date.now() / 1000);
   const ttl = tokenTtlSeconds();
-  const accessToken = signJwt({
+  const accessToken = signPayload({
     iss: oauthIssuer(req),
     sub: subject(),
     aud: entry.resource,
     client_id: entry.client_id,
     scope: entry.scope,
+    jti: randomBytes(16).toString("base64url"),
     iat: now,
     exp: now + ttl,
   });
   return NextResponse.json(
     { access_token: accessToken, token_type: "Bearer", expires_in: ttl, scope: entry.scope },
-    { headers: { "Cache-Control": "no-store" } }
+    { headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }
   );
 }
 
@@ -299,7 +330,9 @@ export async function handleRegister(req: NextRequest): Promise<Response> {
   } catch {
     return NextResponse.json({ error: "invalid_client_metadata" }, { status: 400 });
   }
-  const redirectUris = Array.isArray(body.redirect_uris) ? body.redirect_uris.filter((uri): uri is string => typeof uri === "string") : [];
+  const redirectUris = Array.isArray(body.redirect_uris)
+    ? [...new Set(body.redirect_uris.filter((uri): uri is string => typeof uri === "string" && validRedirectUri(uri)))]
+    : [];
   if (redirectUris.length === 0) return NextResponse.json({ error: "invalid_redirect_uri" }, { status: 400 });
   const clientId = `chatgpt-${randomBytes(12).toString("base64url")}`;
   registeredClients.set(clientId, { redirect_uris: redirectUris, created_at: Date.now() });
@@ -312,6 +345,6 @@ export async function handleRegister(req: NextRequest): Promise<Response> {
       response_types: ["code"],
       token_endpoint_auth_method: "none",
     },
-    { status: 201 }
+    { status: 201, headers: { "Cache-Control": "no-store" } }
   );
 }
