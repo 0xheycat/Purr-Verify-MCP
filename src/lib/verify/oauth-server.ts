@@ -7,7 +7,8 @@ import {
   verifyEd25519,
 } from "./oauth-keys";
 import {
-  consumeCodeAndIssueRefreshCredential,
+  consumeAuthorizationCodeOnce,
+  issueRefreshCredential,
   revokeRefreshCredentialFamily,
   rotateRefreshCredential,
 } from "./oauth-state";
