@@ -5,7 +5,6 @@ import {
   generateKeyPairSync,
   sign,
   verify,
-  type JsonWebKey,
   type KeyObject,
 } from "node:crypto";
 
@@ -148,7 +147,7 @@ export function verifyEd25519(payload: string, signature: Buffer, kid: string): 
 
 export function getOAuthPublicJwks(): Record<string, unknown>[] {
   return [...loadOAuthKeySet().verificationKeys.entries()].map(([kid, publicKey]) => {
-    const jwk = publicKey.export({ format: "jwk" }) as JsonWebKey;
+    const jwk = publicKey.export({ format: "jwk" }) as Record<string, unknown>;
     return { ...jwk, kid, use: "sig", alg: oauthSigningAlgorithm() };
   });
 }
