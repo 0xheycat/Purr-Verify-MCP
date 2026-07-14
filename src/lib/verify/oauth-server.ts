@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { getOAuthSigningKey, oauthSigningAlgorithm, signEd25519, verifyEd25519 } from "./oauth-keys";
+import {
+  consumeAuthorizationCodeOnce,
+  issueRefreshCredential,
+  revokeRefreshCredentialFamily,
+  rotateRefreshCredential,
+} from "./oauth-state";
 
 const registeredClients = new Map<string, { redirect_uris: string[]; created_at: number }>();
-const consumedAuthorizationCodes = new Set<string>();
 
 interface AuthorizationCodePayload {
   typ: "oauth_code";
