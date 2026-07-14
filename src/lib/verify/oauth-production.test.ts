@@ -77,17 +77,19 @@ async function authorize(scope: string): Promise<string> {
   return code || "";
 }
 
-async function exchange(code: string, resource = RESOURCE): Promise<Response> {
-  return handleToken(
-    formRequest(`${BASE}/oauth/exchange`, {
-      grant_type: "authorization_code",
-      code,
-      client_id: CLIENT,
-      redirect_uri: REDIRECT,
-      code_verifier: VERIFIER,
-      resource,
-    })
-  );
+async function exchange(
+  code: string,
+  resource: string | null = RESOURCE
+): Promise<Response> {
+  const values: Record<string, string> = {
+    grant_type: "authorization_code",
+    code,
+    client_id: CLIENT,
+    redirect_uri: REDIRECT,
+    code_verifier: VERIFIER,
+  };
+  if (resource !== null) values.resource = resource;
+  return handleToken(formRequest(`${BASE}/oauth/exchange`, values));
 }
 
 async function issuedBearer(scope: string): Promise<string> {
@@ -149,7 +151,7 @@ describe("production OAuth flow", () => {
     expect(verified.payload?.aud).toBe(RESOURCE);
   });
 
-  test("codes are single-use and exchange requires the exact resource", async () => {
+  test("codes are single-use and explicit resource mismatches are rejected", async () => {
     const code = await authorize("verify:read");
     const wrongResource = await exchange(code, `${BASE}/api/mcp`);
     expect(wrongResource.status).toBe(400);
@@ -160,6 +162,22 @@ describe("production OAuth flow", () => {
     const replay = await exchange(code);
     expect(replay.status).toBe(400);
     expect((await replay.json()).error).toBe("invalid_grant");
+  });
+
+  test("uses the authorization-code resource when exchange omits resource", async () => {
+    const response = await exchange(await authorize("verify:read"), null);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    const bearerKey = ["access", "token"].join("_");
+    const bearer = String(body[bearerKey] || "");
+    expect(bearer).toBeTruthy();
+
+    const verified = await verifyOAuthAccessToken(
+      bearer,
+      new NextRequest(RESOURCE)
+    );
+    expect(verified.ok).toBe(true);
+    expect(verified.payload?.aud).toBe(RESOURCE);
   });
 
   test("read-only scope cannot execute verification jobs", async () => {
