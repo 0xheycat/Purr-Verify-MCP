@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import {
   createAccessTokenClaims,
@@ -117,7 +116,6 @@ export async function handleToken(req: NextRequest): Promise<Response> {
       scope: consumed.record.scope,
       resource: consumed.record.resource,
       subject: consumed.record.subject,
-      familyId: randomUUID(),
     })
   );
   return oauthJson(successBody(credential, consumed.record.scope));
