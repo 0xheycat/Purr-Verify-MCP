@@ -280,10 +280,12 @@ describe("OAuth authorization-code flow", () => {
         code_verifier: VERIFIER,
       })
     );
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({
-      error: "invalid_target",
-    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as OAuthTokenBody;
+    expect(body.access_token).toBeTruthy();
+    expect(
+      verifyOAuthAccessToken(body.access_token!, request("/mcp"))
+    ).toMatchObject({ ok: true });
   });
 
   test("rejects tampered signatures and unknown key ids", async () => {
