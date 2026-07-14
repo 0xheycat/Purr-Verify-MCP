@@ -66,17 +66,18 @@ export async function handleToken(req: NextRequest): Promise<Response> {
     return oauthJson({ error: "unsupported_grant_type" }, 400);
   }
 
-  const resource = params.get("resource") || "";
+  const resource = params.get("resource");
+  const expectedResource = oauthResourceUrl(req);
   const clientId = params.get("client_id") || "";
   const redirectUri = params.get("redirect_uri") || "";
   const verifier = params.get("code_verifier") || "";
   const code = params.get("code") || "";
-  if (!resource || resource !== oauthResourceUrl(req)) {
+  if (resource !== null && resource !== expectedResource) {
     return oauthJson(
       {
         error: "invalid_target",
         error_description:
-          "resource is required and must match the MCP resource",
+          "resource must match the MCP resource when supplied",
       },
       400
     );
@@ -97,7 +98,10 @@ export async function handleToken(req: NextRequest): Promise<Response> {
     (record: OAuthAuthorizationCodeRecord) => {
       if (record.clientId !== clientId) return "client_id mismatch";
       if (record.redirectUri !== redirectUri) return "redirect_uri mismatch";
-      if (record.resource !== resource) return "resource mismatch";
+      if (record.resource !== expectedResource) return "resource mismatch";
+      if (resource !== null && record.resource !== resource) {
+        return "resource mismatch";
+      }
       if (record.codeChallengeMethod !== "S256") {
         return "unsupported PKCE method";
       }
