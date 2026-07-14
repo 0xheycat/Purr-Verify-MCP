@@ -6,7 +6,7 @@ services:
     region: singapore
     buildCommand: bun install --frozen-lockfile && bun run build
     startCommand: bun run start
-    autoDeployTrigger: checksPass
+    autoDeployTrigger: commit
     healthCheckPath: /api/health
     maxShutdownDelaySeconds: 120
     disk:
