@@ -585,13 +585,13 @@ async function handleRefreshGrant(
       400
     );
   }
-  const resource = params.get("resource") || "";
-  if (!resource || resource !== oauthResourceUrl(req)) {
+  const resource = params.get("resource") || undefined;
+  if (resource && resource !== oauthResourceUrl(req)) {
     return oauthJson(
       {
         error: "invalid_target",
         error_description:
-          "resource is required and must match the authorized MCP resource",
+          "resource must match the authorized MCP resource when supplied",
       },
       400
     );
