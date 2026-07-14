@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { getOAuthSigningKey, oauthSigningAlgorithm, signEd25519, verifyEd25519 } from "./oauth-keys";
 
 const registeredClients = new Map<string, { redirect_uris: string[]; created_at: number }>();
 const consumedAuthorizationCodes = new Set<string>();
