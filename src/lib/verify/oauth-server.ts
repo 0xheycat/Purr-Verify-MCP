@@ -50,9 +50,7 @@ function normalizeNoTrailingSlash(value: string): string {
 
 function requestOrigin(req: NextRequest): string {
   const parsed = new URL(req.url);
-  const proto = req.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() || parsed.protocol.replace(/:$/, "") || "https";
-  const host = req.headers.get("x-forwarded-host")?.split(",")[0]?.trim() || req.headers.get("host") || parsed.host;
-  return `${proto}://${host}`;
+  return parsed.origin;
 }
 
 function publicBaseUrl(req: NextRequest): string {
@@ -60,7 +58,7 @@ function publicBaseUrl(req: NextRequest): string {
 }
 
 export function oauthIssuer(req: NextRequest): string {
-  return normalizeNoTrailingSlash(process.env.OAUTH_ISSUER || requestOrigin(req));
+  return normalizeNoTrailingSlash(process.env.OAUTH_ISSUER || publicBaseUrl(req));
 }
 
 export function oauthResourceUrl(req: NextRequest): string {
@@ -68,7 +66,8 @@ export function oauthResourceUrl(req: NextRequest): string {
 }
 
 export function supportedOauthScopes(): string[] {
-  return splitList(process.env.OAUTH_SCOPES_SUPPORTED || "verify:run verify:read repo read:user user:email");
+  const configured = splitList(process.env.OAUTH_SCOPES_SUPPORTED || DEFAULT_OAUTH_SCOPES.join(" "));
+  return [...new Set(configured.length > 0 ? configured : DEFAULT_OAUTH_SCOPES)];
 }
 
 function allowedRedirectUris(): string[] {
