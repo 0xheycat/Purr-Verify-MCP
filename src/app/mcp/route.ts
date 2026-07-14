@@ -40,6 +40,30 @@ function requiresCheck(body: unknown): boolean {
   return asMessages(body).some((message) => message?.method === "tools/call");
 }
 
+const TOOL_SCOPE: Record<string, string> = {
+  health_check: "verify:read",
+  list_allowed_commands: "verify:read",
+  list_verification_jobs: "verify:read",
+  get_verification_job: "verify:read",
+  list_share_links: "verify:read",
+  create_verification_job: "verify:run",
+  cancel_verification_job: "verify:run",
+  create_share_link: "verify:share",
+  revoke_share_links: "verify:share",
+};
+
+function missingOAuthScope(messages: McpMessage[], scopes?: string[]): { tool: string; scope: string } | null {
+  if (!scopes) return null;
+  const granted = new Set(scopes);
+  for (const message of messages) {
+    if (message.method !== "tools/call") continue;
+    const tool = message.params?.name || "";
+    const required = TOOL_SCOPE[tool];
+    if (required && !granted.has(required)) return { tool, scope: required };
+  }
+  return null;
+}
+
 function firstRequestId(body: unknown): string | number | null {
   return asMessages(body).find((message) => message?.id !== undefined)?.id ?? null;
 }
@@ -95,6 +119,7 @@ function debugToolResponse(req: NextRequest, message: McpMessage, requestId: str
         ok: auth.ok,
         service: "purr-verify-mcp",
         authMode: auth.authMode,
+        scopes: auth.scopes || null,
         reason: auth.reason || null,
         githubUser: auth.githubUser || null,
         serverTime: new Date().toISOString(),
@@ -205,6 +230,17 @@ export async function POST(req: NextRequest) {
       return Response.json(rpcError(firstRequestId(body), -32001, `Unauthorized: ${reason}`), {
         status: 401,
         headers: { ...Object.fromEntries(oauthAuthenticateHeaders(req, reason)), "x-purr-request-id": requestId, "cache-control": "no-store" },
+      });
+    }
+    const missing = missingOAuthScope(messages, auth.scopes);
+    if (missing) {
+      const reason = `Insufficient scope: ${missing.scope} is required for ${missing.tool}`;
+      recordVerifyDebugError({ requestId, phase: "scope_check", status: 403, code: "insufficient_scope", message: reason });
+      const headers = oauthAuthenticateHeaders(req);
+      headers.set("WWW-Authenticate", `${headers.get("WWW-Authenticate")}, error="insufficient_scope", scope="${missing.scope}"`);
+      return Response.json(rpcError(firstRequestId(body), -32003, reason), {
+        status: 403,
+        headers: { ...Object.fromEntries(headers), "x-purr-request-id": requestId, "cache-control": "no-store" },
       });
     }
   }

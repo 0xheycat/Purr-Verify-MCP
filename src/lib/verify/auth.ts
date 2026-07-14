@@ -33,9 +33,10 @@ export interface AuthContext {
   githubToken?: string;
   /** GitHub username (login) when authenticated via github_passthrough. */
   githubUser?: string;
+  /** Granted OAuth scopes. Undefined for legacy self-hosted credentials. */
+  scopes?: string[];
 }
 
-// ---- GitHub passthrough validation cache ----
 interface CachedAuth {
   ok: boolean;
   user?: string;
@@ -115,13 +116,9 @@ export async function checkAuth(req: NextRequest): Promise<AuthContext> {
       token = trimmed;
     }
   }
-  if (!token) {
-    const url = new URL(req.url);
-    token = url.searchParams.get("token");
-  }
 
   if (!token) {
-    return { ok: false, reason: "Missing Authorization header or token query param", authMode: cfg.authMode };
+    return { ok: false, reason: "Missing Authorization header", authMode: cfg.authMode };
   }
 
   if (cfg.authMode === "github_passthrough") {
@@ -141,11 +138,14 @@ export async function checkAuth(req: NextRequest): Promise<AuthContext> {
     return { ok: true, authMode: "github_passthrough", githubToken: token, githubUser: res.user };
   }
 
-  // server_token mode can also accept OAuth access tokens issued by the
-  // embedded OAuth server. This keeps VERIFY_TOKEN private from ChatGPT.
   const oauth = verifyOAuthAccessToken(token, req);
   if (oauth.ok) {
-    return { ok: true, authMode: "oauth_jwt" };
+    const rawScope = typeof oauth.payload?.scope === "string" ? oauth.payload.scope : "";
+    return {
+      ok: true,
+      authMode: "oauth_jwt",
+      scopes: rawScope.split(/\s+/).map((scope) => scope.trim()).filter(Boolean),
+    };
   }
 
   if (!cfg.verifyToken) {

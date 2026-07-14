@@ -42,7 +42,7 @@ export function oauthResourceMetadataUrl(req: NextRequest): string {
 
 export function oauthProtectedResourceMetadata(req: NextRequest): Record<string, unknown> {
   const authorizationServers = splitList(process.env.OAUTH_AUTHORIZATION_SERVERS || oauthIssuer(req));
-  const scopes = splitList(process.env.OAUTH_SCOPES_SUPPORTED || "verify:run verify:read repo read:user user:email");
+  const scopes = splitList(process.env.OAUTH_SCOPES_SUPPORTED || "verify:run verify:read verify:share");
 
   return {
     resource: mcpResourceUrl(req),
