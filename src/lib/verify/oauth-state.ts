@@ -288,7 +288,10 @@ export async function rotateRefreshCredential(input: {
     if (current.status === "revoked") {
       return { ok: false, reason: "revoked" };
     }
-    if (current.clientId !== input.clientId || current.resource !== input.resource) {
+    if (
+      current.clientId !== input.clientId ||
+      (input.resource !== undefined && current.resource !== input.resource)
+    ) {
       return {
         ok: false,
         reason: "mismatch",
