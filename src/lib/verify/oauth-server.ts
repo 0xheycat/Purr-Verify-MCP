@@ -75,10 +75,6 @@ function tokenTtlSeconds(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 3600;
 }
 
-function jwtSecret(): string {
-  return process.env.OAUTH_JWT_SECRET || process.env.VERIFY_TOKEN || "";
-}
-
 function subject(): string {
   return process.env.OAUTH_SUBJECT || "0xheycat";
 }
