@@ -2,8 +2,19 @@
 // Returns service health and active/queued/total job counts.
 
 import { NextResponse } from "next/server";
-import { MAX_LONG_RUN_TIMEOUT_MS, VERSION, getConfig, isConfigured, githubTokenSource } from "@/lib/verify/config";
-import { activeJobCount, queuedJobCount, totalJobCount, loadPersisted } from "@/lib/verify/store";
+import {
+  MAX_LONG_RUN_TIMEOUT_MS,
+  VERSION,
+  getConfig,
+  githubTokenSource,
+  isConfigured,
+} from "@/lib/verify/config";
+import {
+  activeJobCount,
+  loadPersisted,
+  queuedJobCount,
+  totalJobCount,
+} from "@/lib/verify/store";
 import { ensureScheduler } from "@/lib/verify/executor";
 import { runnerTools } from "@/lib/verify/system-tools";
 import type { HealthResponse } from "@/lib/verify/types";
@@ -40,10 +51,13 @@ export async function GET() {
       multiInstanceSafe: cfg.oauthStorageMode === "prisma",
       notes:
         cfg.oauthStorageMode === "prisma"
-          ? ["Shared transactional OAuth storage is selected."]
+          ? [
+              "Shared transactional OAuth storage is selected.",
+              "Confirm DATABASE_URL points at migrated Prisma tables before scaling instances.",
+            ]
           : [
               "Local JSON OAuth storage supports one active instance only.",
-              "Set OAUTH_STORAGE_MODE=prisma after deploying and wiring the OAuth Prisma adapter.",
+              "Set OAUTH_STORAGE_MODE=prisma after deploying the OAuth Prisma tables and DATABASE_URL.",
             ],
     },
     configured: configured.ok,
