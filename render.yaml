@@ -2,23 +2,66 @@ services:
   - type: web
     name: purr-verify-mcp
     runtime: node
-    plan: free
+    plan: starter
+    region: singapore
     buildCommand: bun install --frozen-lockfile && bun run build
     startCommand: bun run start
-    autoDeploy: true
+    autoDeployTrigger: checksPass
+    healthCheckPath: /api/health
+    maxShutdownDelaySeconds: 120
+    disk:
+      name: purr-verify-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: AUTH_MODE
-        value: github_passthrough
-      - key: ALLOWED_REPOS
-        value: "*"
-      - key: ALLOW_ALL_REPOS
-        value: "true"
+        value: server_token
       - key: VERIFY_TOKEN
         generateValue: true
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: ALLOWED_REPOS
+        sync: false
+      - key: ALLOW_ALL_REPOS
+        value: "false"
+
+      - key: PUBLIC_BASE_URL
+        value: https://verify.pursr.xyz
+      - key: OAUTH_ISSUER
+        value: https://verify.pursr.xyz
+      - key: OAUTH_RESOURCE_URL
+        value: https://verify.pursr.xyz/mcp
+      - key: OAUTH_AUTHORIZATION_SERVERS
+        value: https://verify.pursr.xyz
+      - key: OAUTH_RESOURCE_NAME
+        value: Purr Verify MCP
+      - key: OAUTH_REALM
+        value: purr-verify-mcp
+      - key: OAUTH_CLIENT_ID
+        value: chatgpt-purr-verify
+      - key: OAUTH_ALLOWED_REDIRECT_URIS
+        sync: false
+      - key: OAUTH_OWNER_CODE
+        sync: false
+      - key: OAUTH_PRIVATE_KEY_PEM
+        sync: false
+      - key: OAUTH_KEY_ID
+        value: purr-verify-2026-07
+      - key: OAUTH_TOKEN_TTL_SECONDS
+        value: "3600"
+      - key: OAUTH_SUBJECT
+        value: 0xheycat
+      - key: OAUTH_SCOPES_SUPPORTED
+        value: verify:read verify:run verify:share
+      - key: OAUTH_DCR_ENABLED
+        value: "false"
+
       - key: WORKDIR_BASE
-        value: .verify-workspaces
+        value: /tmp/purr-verify-workspaces
       - key: VERIFY_DATA_DIR
-        value: .verify-data
+        value: /var/data/verify
+      - key: TOOLCHAIN_CACHE_DIR
+        value: /var/data/toolchains
       - key: MAX_LOG_BYTES
         value: "500000"
       - key: COMMAND_TIMEOUT_MS
