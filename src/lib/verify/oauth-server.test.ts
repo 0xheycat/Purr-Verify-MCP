@@ -318,6 +318,21 @@ describe("OAuth authorization-code flow", () => {
 });
 
 describe("OAuth refresh grants", () => {
+  test("uses the stored grant resource when refresh omits resource", async () => {
+    const initial = await exchangeAuthorizationCode();
+    const response = await handleToken(
+      formRequest("/oauth/exchange", {
+        grant_type: "refresh_token",
+        refresh_token: initial.refresh_token!,
+        client_id: CLIENT_ID,
+      })
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as OAuthTokenBody;
+    expect(body.access_token).toBeTruthy();
+    expect(body.refresh_token).toBeTruthy();
+  });
+
   test("rotates credentials and revokes the family on replay", async () => {
     const initial = await exchangeAuthorizationCode();
     const firstRefresh = await refresh(initial.refresh_token!);
