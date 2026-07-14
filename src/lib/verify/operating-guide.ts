@@ -1,9 +1,9 @@
 export const VERIFY_MCP_INSTRUCTIONS =
-  "Before verification work, call read_operating_guide, health_check, and list_allowed_commands. Use async mode for install/build/lint/typecheck/test. Never run heavy verification in sync mode. Poll get_verification_job until terminal status. Return summarized logs unless full logs are requested.";
+  "Before verification work, call read_operating_guide, health_check, and list_allowed_commands. Use async mode for install/build/lint/typecheck/test. Never run heavy verification in sync mode. Poll get_verification_job until terminal status. Retry transient read-only transport failures with bounded backoff. A failed job ends only the current bounded run; never pause a recurring schedule. Return summarized logs unless full logs are requested.";
 
 export const VERIFY_OPERATING_GUIDE = {
   name: "Purr Verify MCP Operating Guide",
-  version: "2026-07-08",
+  version: "2026-07-14",
   serverRole:
     "Use this MCP only for runtime verification. It clones a GitHub repo/ref into an isolated workspace and runs allowlisted commands. It must not edit repositories, create PRs, or replace GitHub MCP.",
   startupProtocol: [
@@ -18,7 +18,10 @@ export const VERIFY_OPERATING_GUIDE = {
     "Heavy commands are blocked in sync mode.",
     "Heavy commands include install, build, lint, typecheck, test, prisma generate, playwright, cypress, vitest, jest, and CI scripts.",
     "Use sync only for a short single smoke command expected to complete quickly.",
-    "Do not retry failed jobs in a loop. Stop and report jobId, command, status, and failure summary.",
+    "Retry transient read-only MCP transport errors, timeouts, HTTP 429, and HTTP 5xx at most five times with backoff of 2, 4, 8, 16, and 32 seconds.",
+    "Do not submit an identical failed verification job repeatedly. Record jobId, command, status, and failure summary; fix the source or test before a new job on the next scheduled run.",
+    "If Verify MCP is unavailable, end only the current bounded run gracefully. After two consecutive scheduled turns, record VERIFY_SKIPPED and allow an implementation commit with explicit unverified evidence.",
+    "Never disable, pause, or terminate a recurring schedule because verification is unavailable or failed. Resume from fresh repository state on the next run.",
     "Summarize logs by default. Provide full logs only when requested.",
     "Use GitHub MCP for repository edits, branches, commits, PRs, comments, and file inspection.",
     "Use Notion only for project context, specs, plans, and audit notes.",
@@ -31,7 +34,11 @@ export const VERIFY_OPERATING_GUIDE = {
   defaultVerificationPolicy: {
     mode: "async",
     logMode: "summary",
-    maxRetries: 0,
+    maxIdenticalJobRetries: 0,
+    readOnlyTransportRetries: 5,
+    readOnlyBackoffSeconds: [2, 4, 8, 16, 32],
+    unavailableTurnsBeforeSkip: 2,
+    recurringScheduleAction: "continue",
     pollUntilTerminal: true,
   },
 };
