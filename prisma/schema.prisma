@@ -30,3 +30,62 @@ model Post {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+model OAuthAuthorizationCode {
+  codeHash  String   @id
+  clientId  String
+  subject   String
+  scope     String
+  resource  String
+  expiresAt DateTime
+  consumedAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([clientId, subject])
+  @@index([expiresAt])
+}
+
+model OAuthRefreshGrant {
+  credentialHash String   @id
+  familyId       String
+  clientId       String
+  subject        String
+  scope          String
+  resource       String
+  status         String
+  createdAt      DateTime @default(now())
+  expiresAt      DateTime
+  rotatedAt      DateTime?
+  revokedAt      DateTime?
+  replacedByHash String?
+  version        Int      @default(0)
+
+  @@index([familyId])
+  @@index([clientId, subject])
+  @@index([status, expiresAt])
+}
+
+model OAuthDynamicClient {
+  clientId         String   @id
+  redirectUrisJson String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  revokedAt        DateTime?
+
+  @@index([revokedAt])
+}
+
+model OAuthAuditEvent {
+  id           String   @id @default(cuid())
+  event        String
+  clientId     String?
+  subject      String?
+  familyId     String?
+  resource     String?
+  metadataJson String?
+  createdAt    DateTime @default(now())
+
+  @@index([event, createdAt])
+  @@index([clientId, createdAt])
+  @@index([familyId, createdAt])
+}
