@@ -1428,6 +1428,7 @@ async function drain(): Promise<void> {
     });
   }
   trimOldJobs();
+  void sweepOrphanWorkspaces();
 }
 
 export interface CreateJobInput {
