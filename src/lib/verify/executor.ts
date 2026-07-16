@@ -1162,6 +1162,12 @@ function finalize(
 ): void {
   const job = getJob(jobId);
   if (!job) return;
+  if (
+    job.finishedAt &&
+    (job.status === "success" || job.status === "failed" || job.status === "canceled" || job.status === "timeout")
+  ) {
+    return;
+  }
   const finishedAt = nowIso();
   const startMs = job.startedAt ? new Date(job.startedAt).getTime() : Date.now();
   const durationMs = Date.now() - startMs;
