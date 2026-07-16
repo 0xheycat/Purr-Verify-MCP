@@ -44,7 +44,10 @@ export interface VerifyConfig {
   allowAllRepos: boolean;
   workdirBase: string;
   maxLogBytes: number;
+  /** Effective per-command timeout, never greater than the total job timeout. */
   commandTimeoutMs: number;
+  /** Raw COMMAND_TIMEOUT_MS value before normalization. */
+  configuredCommandTimeoutMs: number;
   jobTimeoutMs: number;
   maxConcurrentJobs: number;
   cleanupAfterMs: number;
@@ -112,6 +115,9 @@ export function getConfig(): VerifyConfig {
         .map((s) => s.trim())
         .filter((s) => s && s !== "*");
   const dataDir = strEnv("VERIFY_DATA_DIR", ".verify-data");
+  const configuredCommandTimeoutMs = intEnv("COMMAND_TIMEOUT_MS", 600_000);
+  const jobTimeoutMs = intEnv("JOB_TIMEOUT_MS", 1_800_000);
+  const commandTimeoutMs = Math.min(configuredCommandTimeoutMs, jobTimeoutMs);
   return {
     verifyToken,
     githubToken,
@@ -120,8 +126,9 @@ export function getConfig(): VerifyConfig {
     allowAllRepos,
     workdirBase: resolveWorkdirBase(),
     maxLogBytes: intEnv("MAX_LOG_BYTES", 500_000),
-    commandTimeoutMs: intEnv("COMMAND_TIMEOUT_MS", 600_000),
-    jobTimeoutMs: intEnv("JOB_TIMEOUT_MS", 1_800_000),
+    commandTimeoutMs,
+    configuredCommandTimeoutMs,
+    jobTimeoutMs,
     maxConcurrentJobs: Math.max(1, intEnv("MAX_CONCURRENT_JOBS", 1)),
     cleanupAfterMs: intEnv("CLEANUP_AFTER_MS", 3_600_000),
     dataDir: path.resolve(process.cwd(), dataDir),
@@ -133,18 +140,19 @@ export function getConfig(): VerifyConfig {
 }
 
 export function effectiveDefaultTimeouts(
-  cfg: Pick<VerifyConfig, "commandTimeoutMs" | "jobTimeoutMs"> = getConfig()
+  cfg: Pick<VerifyConfig, "commandTimeoutMs" | "configuredCommandTimeoutMs" | "jobTimeoutMs"> = getConfig()
 ): EffectiveDefaultTimeouts {
+  const configuredCommandTimeoutMs = cfg.configuredCommandTimeoutMs;
   const commandTimeoutMs = Math.min(cfg.commandTimeoutMs, cfg.jobTimeoutMs);
-  const normalized = commandTimeoutMs !== cfg.commandTimeoutMs;
+  const normalized = commandTimeoutMs !== configuredCommandTimeoutMs;
   return {
-    configuredCommandTimeoutMs: cfg.commandTimeoutMs,
+    configuredCommandTimeoutMs,
     commandTimeoutMs,
     jobTimeoutMs: cfg.jobTimeoutMs,
     normalized,
     warnings: normalized
       ? [
-          `COMMAND_TIMEOUT_MS (${cfg.commandTimeoutMs}) exceeded JOB_TIMEOUT_MS (${cfg.jobTimeoutMs}); effective command timeout was clamped to the job timeout.`,
+          `COMMAND_TIMEOUT_MS (${configuredCommandTimeoutMs}) exceeded JOB_TIMEOUT_MS (${cfg.jobTimeoutMs}); effective command timeout was clamped to the job timeout.`,
         ]
       : [],
   };
