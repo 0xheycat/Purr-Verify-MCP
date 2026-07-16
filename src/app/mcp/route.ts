@@ -10,8 +10,12 @@ import {
   READ_OPERATING_GUIDE_TOOL,
   VERIFY_MCP_INSTRUCTIONS,
   VERIFY_OPERATING_GUIDE,
-  findHeavySyncCommand,
 } from "@/lib/verify/operating-guide";
+import {
+  decorateMcpResponse,
+  requestWithJsonBody,
+  routeMcpExecutionBody,
+} from "@/lib/verify/mcp-execution-routing";
 import {
   VERIFY_DEBUG_TOOLS,
   purrRequestId,
@@ -89,10 +93,6 @@ function isReadOperatingGuideCall(message: McpMessage): boolean {
   return message?.method === "tools/call" && message.params?.name === "read_operating_guide";
 }
 
-function isCreateVerificationJobCall(message: McpMessage): boolean {
-  return message?.method === "tools/call" && message.params?.name === "create_verification_job";
-}
-
 function readGuideResponse(id: string | number | null) {
   return rpcResult(id, {
     content: [toText(VERIFY_OPERATING_GUIDE)],
@@ -128,34 +128,6 @@ function debugToolResponse(req: NextRequest, message: McpMessage, requestId: str
     }));
   }
   return null;
-}
-
-function heavySyncValidationError(message: McpMessage, requestId: string) {
-  if (!isCreateVerificationJobCall(message)) return null;
-  const args = message.params?.arguments || {};
-  if (args.mode !== "sync") return null;
-  const heavy = findHeavySyncCommand(args.commands);
-  if (!heavy) return null;
-  recordVerifyDebugError({
-    requestId,
-    phase: "validate_create_verification_job",
-    tool: "create_verification_job",
-    code: "heavy_sync_blocked",
-    message: `Blocked sync verification command: ${heavy}`,
-  });
-  return rpcResult(message.id ?? null, {
-    content: [
-      toText({
-        error: "heavy_sync_blocked",
-        requestId,
-        message:
-          "Heavy verification commands must use mode='async'. Create the job asynchronously, then poll get_verification_job until terminal status.",
-        blockedCommand: heavy,
-        recommendedMode: "async",
-      }),
-    ],
-    isError: true,
-  });
 }
 
 async function mcpJson(req: NextRequest) {
@@ -245,11 +217,21 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const syncError = messages.map((message) => heavySyncValidationError(message, requestId)).find(Boolean);
-  if (syncError) return Response.json(syncError, { status: 200, headers: { "x-purr-request-id": requestId, "cache-control": "no-store" } });
+  const routed = routeMcpExecutionBody(body);
+  const routedRequest = routed.changed ? requestWithJsonBody(req, routed.body) : req;
+  const response = await handleMcp(routedRequest);
+  const needsDecoration =
+    routed.changed || routed.toolNames.some((toolName) => toolName === "health_check");
+  if (!needsDecoration) return withDebugHeaders(response, requestId);
 
-  const response = await handleMcp(req);
-  return withDebugHeaders(response, requestId);
+  const json = await response.json();
+  return Response.json(
+    decorateMcpResponse(json, routed.routings, routed.toolNames),
+    {
+      status: response.status,
+      headers: { "x-purr-request-id": requestId, "cache-control": "no-store" },
+    }
+  );
 }
 
 export async function GET(req: NextRequest) {
