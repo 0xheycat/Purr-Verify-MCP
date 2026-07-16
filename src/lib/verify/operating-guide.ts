@@ -1,24 +1,29 @@
 export const VERIFY_MCP_INSTRUCTIONS =
-  "Before verification work, call read_operating_guide, health_check, and list_allowed_commands. Use mode=auto or async for install/build/lint/typecheck/test. Long-running sync requests are routed to async instead of rejected. Read effectiveMode from the response and poll get_verification_job when it is async. Retry transient read-only transport failures with bounded backoff. A failed job ends only the current bounded run; never pause a recurring schedule. Return summarized logs unless full logs are requested.";
+  "Before verification work, call read_operating_guide, health_check, and list_allowed_commands. Use mode=auto or async for install/build/lint/typecheck/test. Long-running sync requests are routed to async instead of rejected. Valid long_run jobs, including 8-9 hour smoke and soak verification, are first-class developer workflows up to the operator timeout cap. Read effectiveMode from the response and poll get_verification_job when it is async. Use history summaries and bounded log chunks by default while preserving full evidence access. Retry transient read-only transport failures with bounded backoff. A failed job ends only the current bounded run; never pause a recurring schedule.";
 
 export const VERIFY_OPERATING_GUIDE = {
   name: "Purr Verify MCP Operating Guide",
-  version: "2026-07-16",
+  version: "2026-07-16-history",
   serverRole:
     "Use this MCP only for runtime verification. It clones a GitHub repo/ref into an isolated workspace and runs allowlisted commands. It must not edit repositories, create PRs, or replace GitHub MCP.",
   startupProtocol: [
     "Call read_operating_guide first.",
-    "Call health_check to confirm runtime, queue, effective timeout policy, and auth mode.",
+    "Call health_check to confirm runtime, queue, effective timeout policy, durable history status, and auth mode.",
     "Call list_allowed_commands before choosing commands.",
     "Confirm repo, ref, expected_head when available, and command list.",
     "Use create_verification_job with mode=auto or mode=async for install/build/lint/typecheck/test.",
+    "For smoke, soak, fork, and live-observation jobs lasting hours, set long_run=true with explicit command_timeout_ms and job_timeout_ms up to maxLongRunTimeoutMs.",
     "Read requestedMode, effectiveMode, routingReason, and autoRouted from the create response.",
     "Poll get_verification_job until terminal status when effectiveMode is async.",
+    "Use search_verification_history, get_verification_summary, and get_job_log_chunk to inspect durable evidence without flooding agent context.",
   ],
   hardRules: [
     "Heavy commands requested in sync mode are routed to async instead of being rejected.",
     "Heavy commands include install, build, lint, typecheck, test, prisma generate, playwright, cypress, vitest, jest, Surfpool start, and CI scripts.",
     "Explicit sync remains available for one short smoke command expected to complete within the transport window.",
+    "Valid long_run verification is not blocked merely because it lasts for hours. Eight-to-nine-hour smoke, soak, fork, and live-observation jobs are supported up to maxLongRunTimeoutMs when the operator explicitly supplies long_run=true and valid timeout overrides.",
+    "Queued and running jobs are never removed by history retention. Their durable state remains readable until they reach a terminal result, including cancellation and cleanup evidence.",
+    "History summaries and log chunks protect agent context; they do not remove access to full stored job evidence.",
     "Retry transient read-only MCP transport errors, timeouts, HTTP 429, and HTTP 5xx at most five times with backoff of 2, 4, 8, 16, and 32 seconds.",
     "Do not submit an identical source or test failure repeatedly. Record jobId, command, status, and failure summary; change the source, test, or execution inputs before submitting a new job.",
     "A missing or evicted queued/running job is recorded as VERIFY_RESULT_EVICTED. Continue from fresh state on a later run rather than blindly duplicating the same request.",
@@ -44,8 +49,27 @@ export const VERIFY_OPERATING_GUIDE = {
     orphanCleanup: "startup_and_periodic_janitor",
     cleanupEvidence: ["workspaceRemoved", "cacheRemoved", "workspaceError", "cacheError"],
   },
+  historyLifecycle: {
+    backend: "sqlite_wal",
+    activeJobRetention: "never_evict_queued_or_running",
+    terminalEvidence: "durable_and_cursor_paginated",
+    defaultAgentView: "summary",
+    fullEvidenceAccess: "preserved",
+    logAccess: "bounded_chunks_and_search",
+  },
   safeToolRouting: {
-    verifyMcp: ["health_check", "list_allowed_commands", "create_verification_job", "get_verification_job"],
+    verifyMcp: [
+      "health_check",
+      "list_allowed_commands",
+      "create_verification_job",
+      "get_verification_job",
+      "search_verification_history",
+      "get_latest_verification",
+      "get_verification_summary",
+      "compare_verification_jobs",
+      "get_job_log_chunk",
+      "search_job_logs",
+    ],
     githubMcp: ["repository inspection", "branch", "commit", "pull request", "file operations"],
     notion: ["specs", "plans", "audit notes", "project context"],
   },
@@ -58,6 +82,12 @@ export const VERIFY_OPERATING_GUIDE = {
     missingJobStatus: "VERIFY_RESULT_EVICTED",
     explicitCommandTimeoutMs: 600000,
     explicitJobTimeoutMs: 1800000,
+    maxLongRunTimeoutMs: 32400000,
+    supportedLongRunExamples: [
+      "PurrLiquid 8-9 hour live smoke",
+      "Surfpool fork soak",
+      "long-lived integration observation",
+    ],
     recurringScheduleAction: "continue",
     pollWhenEffectiveModeAsync: true,
   },
@@ -66,7 +96,7 @@ export const VERIFY_OPERATING_GUIDE = {
 export const READ_OPERATING_GUIDE_TOOL = {
   name: "read_operating_guide",
   description:
-    "Read the Purr Verify MCP operating guide. Call this before verification work so the agent uses smart execution routing, avoids stream timeouts, and routes repository work to GitHub MCP.",
+    "Read the Purr Verify MCP operating guide. Call this before verification work so the agent uses smart execution routing, durable history, long-run workflows, and the correct repository tool boundary.",
   inputSchema: { type: "object", properties: {} },
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 };
