@@ -1469,6 +1469,7 @@ export interface CreateJobInput {
 export async function enqueueJob(input: CreateJobInput): Promise<Job> {
   await loadPersisted();
   const job = createJob(input);
+  await flushJobPersistence(job.jobId);
   void ensureScheduler();
   return job;
 }
