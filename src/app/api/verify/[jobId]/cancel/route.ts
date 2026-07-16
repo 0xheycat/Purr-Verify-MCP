@@ -3,7 +3,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { checkAuth, notFound, unauthorized } from "@/lib/verify/auth";
-import { getJob, loadPersisted } from "@/lib/verify/store";
+import { getJob, getJobDurable, loadPersisted } from "@/lib/verify/store";
 import { requestCancel } from "@/lib/verify/executor";
 
 export const runtime = "nodejs";
@@ -18,7 +18,7 @@ export async function POST(
 
   await loadPersisted();
   const { jobId } = await ctx.params;
-  const job = getJob(jobId);
+  const job = await getJobDurable(jobId);
   if (!job) return notFound(`job not found: ${jobId}`);
 
   const canceled = requestCancel(jobId);
