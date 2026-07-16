@@ -1456,6 +1456,7 @@ export interface CreateJobInput {
   resolutionProbePackages?: string[];
   resolutionProbeModules?: ResolutionProbeModuleRequest[];
   timeoutPolicy?: Job["timeoutPolicy"];
+  execution?: Job["execution"];
 }
 
 export async function enqueueJob(input: CreateJobInput): Promise<Job> {
