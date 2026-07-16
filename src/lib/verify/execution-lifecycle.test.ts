@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { effectiveDefaultTimeouts } from "./config";
 import { resolveExecutionMode } from "./execution-policy";
+import {
+  decorateMcpResponse,
+  routeMcpExecutionBody,
+} from "./mcp-execution-routing";
 import { cleanupJobDirectories, runWorkspaceJanitor } from "./workspace-cleanup";
 
 describe("execution routing", () => {
@@ -35,6 +39,74 @@ describe("execution routing", () => {
     expect(resolveExecutionMode("auto", ["node --version", "bun --version"])).toMatchObject({
       effectiveMode: "async",
       routingReason: "auto_multi_command",
+    });
+  });
+
+  test("rewrites an MCP heavy sync request and preserves routing evidence", () => {
+    const routed = routeMcpExecutionBody({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "create_verification_job",
+        arguments: {
+          repo: "owner/repo",
+          ref: "main",
+          mode: "sync",
+          commands: ["bun test"],
+          metadata: { purpose: "proof" },
+        },
+      },
+    });
+
+    const body = routed.body as {
+      params: {
+        arguments: {
+          mode: string;
+          metadata: Record<string, unknown>;
+        };
+      };
+    };
+    expect(routed.changed).toBe(true);
+    expect(routed.routings[0]).toMatchObject({
+      requestedMode: "sync",
+      effectiveMode: "async",
+      routingReason: "long_running_commands",
+      autoRouted: true,
+    });
+    expect(body.params.arguments.mode).toBe("async");
+    expect(body.params.arguments.metadata).toMatchObject({
+      purpose: "proof",
+      _purrExecution: {
+        requestedMode: "sync",
+        effectiveMode: "async",
+      },
+    });
+  });
+
+  test("decorates the MCP create result with requested and effective modes", () => {
+    const response = {
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        content: [{ type: "text", text: JSON.stringify({ jobId: "job-1", status: "queued" }) }],
+        isError: false,
+      },
+    };
+    const routing = resolveExecutionMode("sync", ["bun test"]);
+    const decorated = decorateMcpResponse(
+      response,
+      [routing],
+      ["create_verification_job"]
+    ) as typeof response;
+    const payload = JSON.parse(decorated.result.content[0].text) as Record<string, unknown>;
+
+    expect(payload).toMatchObject({
+      jobId: "job-1",
+      requestedMode: "sync",
+      effectiveMode: "async",
+      routingReason: "long_running_commands",
+      autoRouted: true,
     });
   });
 });
