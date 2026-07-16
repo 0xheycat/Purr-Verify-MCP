@@ -9,7 +9,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getConfig } from "./config";
-import { getJob, loadPersisted } from "./store";
+import { getJobDurable, loadPersisted } from "./store";
 import type { Job, PublicJobView, ShareToken } from "./types";
 
 const MAX_TTL_HOURS = 24 * 7; // 7 days
