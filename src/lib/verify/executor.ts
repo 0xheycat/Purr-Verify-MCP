@@ -435,14 +435,6 @@ async function cloneRepo(
   return { ok: true, head: full || shortSha || undefined };
 }
 
-async function removeDir(dir: string): Promise<void> {
-  try {
-    await fs.rm(dir, { recursive: true, force: true });
-  } catch {
-    // best effort
-  }
-}
-
 function publicToolchain(toolchain: EffectiveToolchain): EffectiveToolchain {
   return {
     declared: toolchain.declared,
