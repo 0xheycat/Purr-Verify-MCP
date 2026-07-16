@@ -17,6 +17,7 @@ import { enqueueJob, requestCancel, runJobSync } from "./executor";
 import { getJob, listJobs, loadPersisted } from "./store";
 import { activeJobCount, queuedJobCount, totalJobCount } from "./store";
 import { runnerTools } from "./system-tools";
+import { HISTORY_MCP_TOOLS, handleHistoryMcpTool } from "./history-mcp";
 import {
   createShareToken,
   listShareTokensForJob,
