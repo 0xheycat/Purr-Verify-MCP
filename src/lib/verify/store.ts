@@ -209,7 +209,11 @@ async function readLegacyJobs(): Promise<Job[]> {
 }
 
 async function markInterrupted(job: Job): Promise<Job> {
-  if (job.status !== "running" && job.status !== "queued") return job;
+  if (job.status === "queued") {
+    cacheJob(job);
+    return job;
+  }
+  if (job.status !== "running") return job;
   job.status = "failed";
   job.error = "Job was interrupted by server restart";
   job.finishedAt = job.finishedAt || new Date().toISOString();
