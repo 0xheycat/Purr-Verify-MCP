@@ -1421,7 +1421,7 @@ export async function ensureScheduler(): Promise<void> {
 
 async function drain(): Promise<void> {
   const cfg = getConfig();
-  const all = listJobs(500);
+  const all = listJobs(Number.MAX_SAFE_INTEGER);
   const running = all.filter((j) => j.status === "running").length;
   const queued = all.filter((j) => j.status === "queued");
   let slots = cfg.maxConcurrentJobs - running;
