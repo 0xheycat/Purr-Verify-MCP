@@ -1,11 +1,15 @@
-// POST /mcp  (JSON-RPC 2.0)
-// MCP-style endpoint. initialize and tools/list are open; tools/call requires
-// a bearer token. OAuth protected-resource metadata is exposed for ChatGPT
-// Apps and other remote MCP clients that perform discovery before auth.
+// POST /api/mcp  (JSON-RPC 2.0)
+// Legacy MCP-style endpoint. initialize and tools/list are open; tools/call
+// requires a bearer token. The canonical endpoint remains /mcp.
 
 import { NextRequest } from "next/server";
 import { handleMcp } from "@/lib/verify/mcp";
 import { checkAuth } from "@/lib/verify/auth";
+import {
+  decorateMcpResponse,
+  requestWithJsonBody,
+  routeMcpExecutionBody,
+} from "@/lib/verify/mcp-execution-routing";
 import {
   mcpResourceUrl,
   oauthAuthenticateHeaders,
@@ -58,7 +62,18 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return handleMcp(req);
+  const routed = routeMcpExecutionBody(body);
+  const routedRequest = routed.changed ? requestWithJsonBody(req, routed.body) : req;
+  const response = await handleMcp(routedRequest);
+  const needsDecoration =
+    routed.changed || routed.toolNames.some((toolName) => toolName === "health_check");
+  if (!needsDecoration) return response;
+
+  const json = await response.json();
+  return Response.json(
+    decorateMcpResponse(json, routed.routings, routed.toolNames),
+    { status: response.status }
+  );
 }
 
 // GET returns a small descriptor for discoverability.
