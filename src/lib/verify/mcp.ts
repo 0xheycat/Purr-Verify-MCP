@@ -267,6 +267,14 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
       const args = params.arguments || {};
       try {
         switch (name) {
+        const historyResult = await handleHistoryMcpTool(name, args);
+        if (historyResult.handled) {
+          return rpcResult(rid, {
+            content: [toText(historyResult.payload)],
+            isError: historyResult.isError === true,
+          });
+        }
+        switch (name) {
           case "health_check": {
             await loadPersisted();
             const cfg = getConfig();
