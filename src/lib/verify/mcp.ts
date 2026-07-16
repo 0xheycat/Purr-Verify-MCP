@@ -287,6 +287,8 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
             const cfg = getConfig();
             const configured = isConfigured();
             const tools = await runnerTools();
+            const durableTotalJobs = await totalDurableJobCount();
+            const historyStorage = await verificationHistoryStatus();
             const health: HealthResponse = {
               status: "ok",
               service: "purr-verify-mcp",
