@@ -808,13 +808,7 @@ async function runJob(jobId: string): Promise<void> {
 
   // Job-level timeout.
   rt.jobTimer = setTimeout(() => {
-    const cur = getRuntime(jobId);
-    if (cur?.currentChild) {
-      killChildTree(cur.currentChild, "SIGTERM");
-      setTimeout(() => {
-        if (cur.currentChild) killChildTree(cur.currentChild, "SIGKILL");
-      }, 3000).unref?.();
-    }
+    void terminateRuntimeProcesses(jobId);
     const j = getJob(jobId);
     if (j && (j.status === "running")) {
       finalize(jobId, "timeout", `Job exceeded timeout (${timeoutPolicy.jobTimeoutMs} ms)`);
