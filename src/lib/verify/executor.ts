@@ -1413,8 +1413,6 @@ export async function ensureScheduler(): Promise<void> {
 
 async function drain(): Promise<void> {
   const cfg = getConfig();
-  // Count running.
-  const { listJobs } = await import("./store");
   const all = listJobs(500);
   const running = all.filter((j) => j.status === "running").length;
   const queued = all.filter((j) => j.status === "queued");
