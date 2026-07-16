@@ -406,7 +406,7 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
                 isError: true,
               });
             }
-            const job = getJob(jobId);
+            const job = await getJobDurable(jobId);
             if (!job) {
               return rpcResult(rid, {
                 content: [toText({ error: "not_found", message: `Job not found: ${jobId}` })],
