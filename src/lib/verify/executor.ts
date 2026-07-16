@@ -1532,12 +1532,7 @@ export function requestCancel(jobId: string): boolean {
   const rt = getRuntime(jobId);
   if (rt) {
     rt.cancelRequested = true;
-    if (rt.currentChild) {
-      killChildTree(rt.currentChild, "SIGTERM");
-      setTimeout(() => {
-        if (rt.currentChild) killChildTree(rt.currentChild, "SIGKILL");
-      }, 3000).unref?.();
-    }
+    void terminateRuntimeProcesses(jobId);
   }
   if (job.status === "queued") {
     // Queued jobs can be canceled immediately.
