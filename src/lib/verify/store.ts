@@ -181,7 +181,9 @@ export function createJob(input: {
     error: null,
     cleanupStatus: "pending",
     cleanup: { status: "pending", startedAt: null, finishedAt: null },
-    execution: input.execution,
+    execution:
+      input.execution ??
+      (input.metadata._purrExecution as ExecutionRoutingRecord | undefined),
     tags: input.tags ?? [],
     installStrategies: [],
     resolutionProbe: [],
