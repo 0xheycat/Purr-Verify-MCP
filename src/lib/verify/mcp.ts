@@ -131,10 +131,18 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: "list_verification_jobs",
-    description: "List recent verification jobs (most recent first).",
+    description: "List durable verification history with deterministic cursor pagination. Returns compact summaries by default; use view='full' to preserve the existing full-job listing capability.",
     inputSchema: {
       type: "object",
-      properties: { limit: { type: "number", default: 50 } },
+      properties: {
+        limit: { type: "number", default: 50 },
+        cursor: { type: "string", description: "Opaque cursor returned by the previous page." },
+        view: {
+          type: "string",
+          enum: ["summary", "full"],
+          default: "summary",
+        },
+      },
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
