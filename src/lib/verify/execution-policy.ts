@@ -5,7 +5,6 @@ export interface ExecutionRouting {
   requestedMode: RequestedExecutionMode;
   effectiveMode: EffectiveExecutionMode;
   routingReason:
-    | "default_async"
     | "explicit_async"
     | "explicit_sync"
     | "auto_short_smoke"
@@ -48,14 +47,14 @@ export function resolveExecutionMode(
   const requestedMode: RequestedExecutionMode =
     requested === "sync" || requested === "auto" || requested === "async"
       ? requested
-      : "async";
+      : "auto";
   const longRunningCommand = findLongRunningCommand(commands);
 
   if (requestedMode === "async") {
     return {
       requestedMode,
       effectiveMode: "async",
-      routingReason: requested === undefined ? "default_async" : "explicit_async",
+      routingReason: "explicit_async",
       autoRouted: false,
     };
   }
@@ -65,7 +64,7 @@ export function resolveExecutionMode(
       requestedMode,
       effectiveMode: "async",
       routingReason: "long_running_commands",
-      autoRouted: requestedMode === "sync",
+      autoRouted: true,
       detectedLongRunningCommand: longRunningCommand,
     };
   }
@@ -83,6 +82,6 @@ export function resolveExecutionMode(
     requestedMode,
     effectiveMode: "sync",
     routingReason: requestedMode === "auto" ? "auto_short_smoke" : "explicit_sync",
-    autoRouted: false,
+    autoRouted: requestedMode === "auto",
   };
 }
