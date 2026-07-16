@@ -10,7 +10,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ChildProcess } from "node:child_process";
 import { getConfig } from "./config";
-import type { Job, JobStatus, ResolutionProbeModuleRequest } from "./types";
+import type {
+  ExecutionRoutingRecord,
+  Job,
+  JobStatus,
+  ResolutionProbeModuleRequest,
+} from "./types";
 
 // Internal runtime tracking (not serialized).
 interface RuntimeState {
