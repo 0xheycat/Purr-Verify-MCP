@@ -108,7 +108,7 @@ async function sweepOrphanWorkspaces(force = false): Promise<void> {
   lastJanitorRunMs = Date.now();
   try {
     const activeJobIds = new Set(
-      listJobs(1000)
+      listJobs(Number.MAX_SAFE_INTEGER)
         .filter((job) => job.status === "queued" || job.status === "running")
         .map((job) => job.jobId)
     );
