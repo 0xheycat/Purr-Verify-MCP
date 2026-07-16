@@ -19,6 +19,7 @@ import path from "node:path";
 import { getConfig, isRepoAllowed, isValidHead, isValidRef } from "./config";
 import { parseCommand } from "./parse";
 import { redactText } from "./redact";
+import { cleanupJobDirectories, runWorkspaceJanitor } from "./workspace-cleanup";
 import {
   buildToolchainEnv,
   installStrategy,
@@ -30,6 +31,7 @@ import {
   createJob,
   getJob,
   getRuntime,
+  listJobs,
   loadPersisted,
   setJobStatus,
   trimOldJobs,
@@ -47,6 +49,8 @@ import type {
 } from "./types";
 
 let schedulerRunning = false;
+let janitorRunning = false;
+let lastJanitorRunMs = 0;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -75,6 +79,76 @@ function killChildTree(child: ChildProcess, signal: NodeJS.Signals): void {
     child.kill(signal);
   } catch {
     // ignore
+  }
+}
+
+async function terminateRuntimeProcesses(jobId: string, graceMs = 3000): Promise<void> {
+  const rt = getRuntime(jobId);
+  if (!rt) return;
+  const children = new Set<ChildProcess>();
+  if (rt.currentChild) children.add(rt.currentChild);
+  for (const child of rt.backgroundChildren ?? []) children.add(child);
+  if (children.size === 0) return;
+
+  for (const child of children) killChildTree(child, "SIGTERM");
+  await new Promise((resolve) => setTimeout(resolve, graceMs));
+  for (const child of children) {
+    if (child.exitCode === null && child.signalCode === null) {
+      killChildTree(child, "SIGKILL");
+    }
+  }
+}
+
+async function sweepOrphanWorkspaces(force = false): Promise<void> {
+  const cfg = getConfig();
+  const intervalMs = Math.max(60_000, Math.min(cfg.cleanupAfterMs, 15 * 60_000));
+  if (janitorRunning || (!force && Date.now() - lastJanitorRunMs < intervalMs)) return;
+  janitorRunning = true;
+  lastJanitorRunMs = Date.now();
+  try {
+    const activeJobIds = new Set(
+      listJobs(1000)
+        .filter((job) => job.status === "queued" || job.status === "running")
+        .map((job) => job.jobId)
+    );
+    const entries = await runWorkspaceJanitor({
+      root: cfg.workdirBase,
+      activeJobIds,
+      olderThanMs: cfg.cleanupAfterMs,
+    });
+    const byJob = new Map<string, typeof entries>();
+    for (const entry of entries) {
+      byJob.set(entry.jobId, [...(byJob.get(entry.jobId) ?? []), entry]);
+    }
+    for (const [jobId, jobEntries] of byJob) {
+      const job = getJob(jobId);
+      if (!job || activeJobIds.has(jobId)) continue;
+      const failed = jobEntries.filter((entry) => !entry.removed);
+      const workspaceEntries = jobEntries.filter((entry) => entry.kind === "workspace");
+      const cacheEntries = jobEntries.filter((entry) => entry.kind === "cache");
+      const status = failed.length === 0 ? "done" : "partial";
+      updateJob(jobId, {
+        cleanupStatus: status,
+        cleanup: {
+          status,
+          startedAt: job.cleanup?.startedAt ?? null,
+          finishedAt: nowIso(),
+          workspaceRemoved:
+            workspaceEntries.length > 0
+              ? workspaceEntries.every((entry) => entry.removed)
+              : job.cleanup?.workspaceRemoved,
+          cacheRemoved:
+            cacheEntries.length > 0
+              ? cacheEntries.every((entry) => entry.removed)
+              : job.cleanup?.cacheRemoved,
+          workspaceError:
+            workspaceEntries.find((entry) => entry.error)?.error ?? null,
+          cacheError: cacheEntries.find((entry) => entry.error)?.error ?? null,
+        },
+      });
+    }
+  } finally {
+    janitorRunning = false;
   }
 }
 
@@ -359,14 +433,6 @@ async function cloneRepo(
   const full = (rev.stdout || "").trim();
   const shortSha = (short.stdout || "").trim();
   return { ok: true, head: full || shortSha || undefined };
-}
-
-async function removeDir(dir: string): Promise<void> {
-  try {
-    await fs.rm(dir, { recursive: true, force: true });
-  } catch {
-    // best effort
-  }
 }
 
 function publicToolchain(toolchain: EffectiveToolchain): EffectiveToolchain {
@@ -734,13 +800,7 @@ async function runJob(jobId: string): Promise<void> {
 
   // Job-level timeout.
   rt.jobTimer = setTimeout(() => {
-    const cur = getRuntime(jobId);
-    if (cur?.currentChild) {
-      killChildTree(cur.currentChild, "SIGTERM");
-      setTimeout(() => {
-        if (cur.currentChild) killChildTree(cur.currentChild, "SIGKILL");
-      }, 3000).unref?.();
-    }
+    void terminateRuntimeProcesses(jobId);
     const j = getJob(jobId);
     if (j && (j.status === "running")) {
       finalize(jobId, "timeout", `Job exceeded timeout (${timeoutPolicy.jobTimeoutMs} ms)`);
@@ -1063,12 +1123,24 @@ async function runJob(jobId: string): Promise<void> {
   } catch (e) {
     finalize(jobId, "failed", `Executor error: ${(e as Error).message}`);
   } finally {
-    // Always cleanup workspace.
+    const cleanupStartedAt = nowIso();
+    updateJob(jobId, {
+      cleanupStatus: "running",
+      cleanup: {
+        status: "running",
+        startedAt: cleanupStartedAt,
+        finishedAt: null,
+      },
+    });
+    await terminateRuntimeProcesses(jobId, 1000);
     clearRuntime(jobId);
-    await removeDir(workdir);
-    await removeDir(cacheDir);
-    const j = getJob(jobId);
-    if (j) updateJob(jobId, { cleanupStatus: "done" });
+    const cleanup = await cleanupJobDirectories(workdir, cacheDir);
+    if (getJob(jobId)) {
+      updateJob(jobId, {
+        cleanupStatus: cleanup.status,
+        cleanup,
+      });
+    }
   }
 }
 
@@ -1090,6 +1162,12 @@ function finalize(
 ): void {
   const job = getJob(jobId);
   if (!job) return;
+  if (
+    job.finishedAt &&
+    (job.status === "success" || job.status === "failed" || job.status === "canceled" || job.status === "timeout")
+  ) {
+    return;
+  }
   const finishedAt = nowIso();
   const startMs = job.startedAt ? new Date(job.startedAt).getTime() : Date.now();
   const durationMs = Date.now() - startMs;
@@ -1327,6 +1405,7 @@ export async function retryCallback(jobId: string): Promise<{
 export async function ensureScheduler(): Promise<void> {
   await loadPersisted();
   if (schedulerRunning) return;
+  await sweepOrphanWorkspaces(true);
   schedulerRunning = true;
   // Loop forever, draining the queue subject to concurrency.
   // Use setImmediate to yield between iterations.
@@ -1340,8 +1419,6 @@ export async function ensureScheduler(): Promise<void> {
 
 async function drain(): Promise<void> {
   const cfg = getConfig();
-  // Count running.
-  const { listJobs } = await import("./store");
   const all = listJobs(500);
   const running = all.filter((j) => j.status === "running").length;
   const queued = all.filter((j) => j.status === "queued");
@@ -1357,6 +1434,7 @@ async function drain(): Promise<void> {
     });
   }
   trimOldJobs();
+  void sweepOrphanWorkspaces();
 }
 
 export interface CreateJobInput {
@@ -1384,6 +1462,7 @@ export interface CreateJobInput {
   resolutionProbePackages?: string[];
   resolutionProbeModules?: ResolutionProbeModuleRequest[];
   timeoutPolicy?: Job["timeoutPolicy"];
+  execution?: Job["execution"];
 }
 
 export async function enqueueJob(input: CreateJobInput): Promise<Job> {
@@ -1459,12 +1538,7 @@ export function requestCancel(jobId: string): boolean {
   const rt = getRuntime(jobId);
   if (rt) {
     rt.cancelRequested = true;
-    if (rt.currentChild) {
-      killChildTree(rt.currentChild, "SIGTERM");
-      setTimeout(() => {
-        if (rt.currentChild) killChildTree(rt.currentChild, "SIGKILL");
-      }, 3000).unref?.();
-    }
+    void terminateRuntimeProcesses(jobId);
   }
   if (job.status === "queued") {
     // Queued jobs can be canceled immediately.

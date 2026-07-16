@@ -134,8 +134,8 @@ export interface VerifyRequest {
   env?: Record<string, string>;
   /** Optional diagnostic: package names to resolve from the cloned workspace after install. */
   resolution_probe?: string[] | ResolutionProbeRequest;
-  /** Execution mode: "async" (default, returns 202 immediately) or "sync" (runs inline, returns final result). */
-  mode?: "sync" | "async";
+  /** Execution mode. "auto" runs one short smoke command inline and routes long-running work to async. */
+  mode?: "sync" | "async" | "auto";
   /**
    * Opt-in long-running verification mode for fork/soak jobs. Defaults keep
    * normal CI bounded; long_run permits per-job timeout overrides up to the
@@ -146,6 +146,24 @@ export interface VerifyRequest {
   command_timeout_ms?: number;
   /** Optional per-job total timeout override in milliseconds, long_run only. */
   job_timeout_ms?: number;
+}
+
+export interface ExecutionRoutingRecord {
+  requestedMode: "sync" | "async" | "auto";
+  effectiveMode: "sync" | "async";
+  routingReason: string;
+  autoRouted: boolean;
+  detectedLongRunningCommand?: string;
+}
+
+export interface CleanupResult {
+  status: "pending" | "running" | "done" | "partial" | "failed" | "skipped";
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  workspaceRemoved?: boolean;
+  cacheRemoved?: boolean;
+  workspaceError?: string | null;
+  cacheError?: string | null;
 }
 
 export interface WebhookDelivery {
@@ -182,7 +200,9 @@ export interface Job {
   metadata: JobMetadata;
   callback_url?: string;
   error?: string | null;
-  cleanupStatus?: "pending" | "done" | "failed" | "skipped";
+  cleanupStatus?: "pending" | "running" | "done" | "partial" | "failed" | "skipped";
+  cleanup?: CleanupResult;
+  execution?: ExecutionRoutingRecord;
   webhookDeliveries?: WebhookDelivery[];
   tags?: string[];
   annotations?: JobAnnotation[];
@@ -195,6 +215,9 @@ export interface Job {
     commandTimeoutMs: number;
     jobTimeoutMs: number;
     maxLongRunTimeoutMs: number;
+    requestedCommandTimeoutMs?: number;
+    normalized?: boolean;
+    warnings?: string[];
   };
 }
 
@@ -222,6 +245,8 @@ export interface HealthResponse {
   backgroundJobsReliable: boolean;
   /** Whether synchronous mode is available (POST /api/verify?mode=sync). */
   syncModeAvailable: boolean;
+  /** Whether smart execution routing is available (mode=auto and heavy sync fallback). */
+  autoModeAvailable?: boolean;
   /** Node.js runtime version (process.version), e.g. "v26.3.0". Optional for backward compat. */
   nodeVersion?: string;
   /** Bun runtime version if running under Bun (process.versions.bun), else null. */
@@ -233,12 +258,21 @@ export interface HealthResponse {
   toolchainDefaultNode?: string | null;
   toolchainDefaultBun?: string | null;
   commandTimeoutMs?: number;
+  configuredCommandTimeoutMs?: number;
   jobTimeoutMs?: number;
+  timeoutWarnings?: string[];
   maxLongRunTimeoutMs?: number;
   runnerTools?: {
     cargo?: ToolAvailability;
     rustc?: ToolAvailability;
     surfpool?: ToolAvailability;
+    python?: ToolAvailability;
+    python3?: ToolAvailability;
+    uv?: ToolAvailability;
+    poetry?: ToolAvailability;
+    pipenv?: ToolAvailability;
+    tox?: ToolAvailability;
+    nox?: ToolAvailability;
   };
 }
 
