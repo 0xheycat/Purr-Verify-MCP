@@ -52,6 +52,7 @@ interface ToolDef {
 
 const TOOLS: ToolDef[] = [
   {
+  ...HISTORY_MCP_TOOLS,
     name: "create_verification_job",
     description:
       "Create a verification job that clones a repo/ref and runs allowlisted commands. mode=auto is the default: one short smoke command can run inline, while long-running or multi-command work is queued. Explicit sync remains available for short work and safely falls back to async for long-running commands instead of rejecting them. AUTH follows the server's configured mode.",
