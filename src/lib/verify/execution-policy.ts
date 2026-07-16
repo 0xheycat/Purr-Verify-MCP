@@ -8,6 +8,7 @@ export interface ExecutionRouting {
     | "explicit_async"
     | "explicit_sync"
     | "auto_short_smoke"
+    | "auto_non_smoke"
     | "auto_multi_command"
     | "long_running_commands";
   autoRouted: boolean;
@@ -26,8 +27,39 @@ const LONG_RUNNING_COMMAND_PATTERNS = [
   /\bcypress\b/i,
   /\bvitest\b/i,
   /\bjest\b/i,
+  /\bpytest\b/i,
+  /\bunittest\b/i,
+  /\btox\b/i,
+  /\bnox\b/i,
+  /\bruff\b/i,
+  /\bmypy\b/i,
+  /\bpyright\b/i,
+  /\bcoverage\b/i,
+  /\buv\s+(?:sync|lock|run|build|python|pip|tool|tree|export)\b/i,
+  /\buvx\b/i,
+  /\bpoetry\b/i,
+  /\bpipenv\b/i,
+  /\bcargo\b/i,
+  /\brustup-init\b/i,
+  /\bsleep\s+\d+\b/i,
   /\bsurfpool\s+start\b/i,
 ];
+
+const SHORT_SMOKE_COMMAND_PATTERNS = [
+  /^node\s+--version$/i,
+  /^bun\s+--version$/i,
+  /^python3?\s+(?:--version|--help)$/i,
+  /^uv\s+--version$/i,
+  /^poetry\s+--version$/i,
+  /^pipenv\s+--version$/i,
+  /^cat\s+reports\/[A-Za-z0-9_.\/-]+\.(?:json|txt)$/i,
+];
+
+export function isKnownShortSmokeCommand(command: unknown): boolean {
+  if (typeof command !== "string") return false;
+  const normalized = command.trim().replace(/\s+/g, " ");
+  return SHORT_SMOKE_COMMAND_PATTERNS.some((pattern) => pattern.test(normalized));
+}
 
 export function findLongRunningCommand(commands: unknown): string | null {
   if (!Array.isArray(commands)) return null;
@@ -74,6 +106,15 @@ export function resolveExecutionMode(
       requestedMode,
       effectiveMode: "async",
       routingReason: "auto_multi_command",
+      autoRouted: true,
+    };
+  }
+
+  if (requestedMode === "auto" && !isKnownShortSmokeCommand(commands[0])) {
+    return {
+      requestedMode,
+      effectiveMode: "async",
+      routingReason: "auto_non_smoke",
       autoRouted: true,
     };
   }

@@ -42,6 +42,32 @@ describe("execution routing", () => {
     });
   });
 
+  test("routes unknown single commands to async while keeping explicit sync available", () => {
+    expect(resolveExecutionMode("auto", ["node scripts/smoke.mjs"])).toMatchObject({
+      effectiveMode: "async",
+      routingReason: "auto_non_smoke",
+      autoRouted: true,
+    });
+    expect(resolveExecutionMode("sync", ["node scripts/smoke.mjs"])).toMatchObject({
+      effectiveMode: "sync",
+      routingReason: "explicit_sync",
+      autoRouted: false,
+    });
+  });
+
+  test("recognizes Python test tools and long sleeps as long-running", () => {
+    expect(resolveExecutionMode("auto", ["python3 -m pytest tests -q"])).toMatchObject({
+      effectiveMode: "async",
+      routingReason: "long_running_commands",
+      detectedLongRunningCommand: "python3 -m pytest tests -q",
+    });
+    expect(resolveExecutionMode("sync", ["sleep 120"])).toMatchObject({
+      effectiveMode: "async",
+      routingReason: "long_running_commands",
+      detectedLongRunningCommand: "sleep 120",
+    });
+  });
+
   test("rewrites an MCP heavy sync request and preserves routing evidence", () => {
     const routed = routeMcpExecutionBody({
       jsonrpc: "2.0",
