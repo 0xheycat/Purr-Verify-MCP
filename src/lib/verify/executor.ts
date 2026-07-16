@@ -1550,6 +1550,6 @@ export function requestCancel(jobId: string): boolean {
   } else {
     updateJob(jobId, { error: "cancel requested" });
   }
-  return true;
   void flushJobPersistence(jobId);
+  return true;
 }
