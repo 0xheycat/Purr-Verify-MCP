@@ -57,9 +57,11 @@ export function routeMcpExecutionBody(body: unknown): RoutedMcpBody {
 }
 
 export function requestWithJsonBody(req: NextRequest, body: unknown): NextRequest {
+  const headers = new Headers(req.headers);
+  headers.delete("content-length");
   return new NextRequest(req.url, {
     method: req.method,
-    headers: req.headers,
+    headers,
     body: JSON.stringify(body),
   });
 }
