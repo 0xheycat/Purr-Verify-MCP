@@ -1423,7 +1423,12 @@ async function drain(): Promise<void> {
   const cfg = getConfig();
   const all = listJobs(Number.MAX_SAFE_INTEGER);
   const running = all.filter((j) => j.status === "running").length;
-  const queued = all.filter((j) => j.status === "queued");
+  const queued = all
+    .filter((j) => j.status === "queued")
+    .sort((a, b) =>
+      a.queuedAt === b.queuedAt
+        ? a.jobId.localeCompare(b.jobId)
+        : a.queuedAt.localeCompare(b.queuedAt));
   let slots = cfg.maxConcurrentJobs - running;
   for (const job of queued) {
     if (slots <= 0) break;
