@@ -29,6 +29,7 @@ import {
 import {
   clearRuntime,
   createJob,
+  flushJobPersistence,
   getJob,
   getRuntime,
   listJobs,
