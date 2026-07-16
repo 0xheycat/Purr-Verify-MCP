@@ -266,7 +266,6 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
       const name = params.name;
       const args = params.arguments || {};
       try {
-        switch (name) {
         const historyResult = await handleHistoryMcpTool(name, args);
         if (historyResult.handled) {
           return rpcResult(rid, {
