@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import {
   MAX_LONG_RUN_TIMEOUT_MS,
   VERSION,
+  effectiveDefaultTimeouts,
   getConfig,
   githubTokenSource,
   isConfigured,
@@ -26,6 +27,7 @@ export async function GET() {
   await loadPersisted();
   void ensureScheduler();
   const cfg = getConfig();
+  const timeouts = effectiveDefaultTimeouts(cfg);
   const configured = isConfigured();
   const tools = await runnerTools();
   const body: HealthResponse & {
@@ -63,14 +65,17 @@ export async function GET() {
     configured: configured.ok,
     backgroundJobsReliable: true,
     syncModeAvailable: true,
+    autoModeAvailable: true,
     nodeVersion: process.version,
     bunVersion: (process.versions as unknown as { bun?: string }).bun ?? null,
     workspaceRoot: cfg.workdirBase,
     toolchainCacheRoot: cfg.toolchainCacheRoot,
     toolchainDefaultNode: cfg.toolchainDefaultNode || null,
     toolchainDefaultBun: cfg.toolchainDefaultBun || null,
-    commandTimeoutMs: cfg.commandTimeoutMs,
-    jobTimeoutMs: cfg.jobTimeoutMs,
+    commandTimeoutMs: timeouts.commandTimeoutMs,
+    configuredCommandTimeoutMs: timeouts.configuredCommandTimeoutMs,
+    jobTimeoutMs: timeouts.jobTimeoutMs,
+    timeoutWarnings: timeouts.warnings,
     maxLongRunTimeoutMs: MAX_LONG_RUN_TIMEOUT_MS,
     runnerTools: tools,
   };
