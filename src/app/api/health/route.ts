@@ -14,7 +14,8 @@ import {
   activeJobCount,
   loadPersisted,
   queuedJobCount,
-  totalJobCount,
+  totalDurableJobCount,
+  verificationHistoryStatus,
 } from "@/lib/verify/store";
 import { ensureScheduler } from "@/lib/verify/executor";
 import { runnerTools } from "@/lib/verify/system-tools";
@@ -30,19 +31,23 @@ export async function GET() {
   const timeouts = effectiveDefaultTimeouts(cfg);
   const configured = isConfigured();
   const tools = await runnerTools();
+  const durableTotalJobs = await totalDurableJobCount();
+  const historyStorage = await verificationHistoryStatus();
   const body: HealthResponse & {
     oauthStorage: {
       mode: "json" | "prisma";
       multiInstanceSafe: boolean;
       notes: string[];
     };
+    historyStorage: Awaited<ReturnType<typeof verificationHistoryStatus>>;
   } = {
     status: "ok",
     service: "purr-verify-mcp",
     time: new Date().toISOString(),
     activeJobs: activeJobCount(),
     queuedJobs: queuedJobCount(),
-    totalJobs: totalJobCount(),
+    totalJobs: durableTotalJobs,
+    historyStorage,
     version: VERSION,
     allowedRepos: cfg.allowedRepos,
     allowAllRepos: cfg.allowAllRepos,

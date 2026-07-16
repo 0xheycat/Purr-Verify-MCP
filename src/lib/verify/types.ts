@@ -228,6 +228,15 @@ export interface HealthResponse {
   activeJobs: number;
   queuedJobs: number;
   totalJobs: number;
+  historyStorage?: {
+    backend: "sqlite-wal";
+    databasePath: string;
+    ready: boolean;
+    journalMode: string | null;
+    lastError: string | null;
+    pendingWrites: number;
+    lastPersistenceError: string | null;
+  };
   version: string;
   allowedRepos: string[];
   /**

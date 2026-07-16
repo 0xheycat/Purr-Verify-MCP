@@ -9,7 +9,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getConfig } from "./config";
-import { getJob, loadPersisted } from "./store";
+import { getJobDurable, loadPersisted } from "./store";
 import type { Job, PublicJobView, ShareToken } from "./types";
 
 const MAX_TTL_HOURS = 24 * 7; // 7 days
@@ -145,7 +145,7 @@ export async function createShareToken(
   await loadPersisted();
   await loadPersistedShares();
 
-  const job = getJob(jobId);
+  const job = await getJobDurable(jobId);
   if (!job) {
     throw new Error(`job not found: ${jobId}`);
   }
@@ -221,7 +221,7 @@ export async function resolveShareToken(tokenStr: string): Promise<ResolvedShare
     return { ok: false, reason: "share token has expired" };
   }
 
-  const job = getJob(t.jobId);
+  const job = await getJobDurable(t.jobId);
   if (!job) return { ok: false, reason: "shared job no longer exists" };
 
   return { ok: true, token: t, job };

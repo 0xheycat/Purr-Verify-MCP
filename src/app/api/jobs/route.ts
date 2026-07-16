@@ -3,7 +3,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { checkAuth, unauthorized } from "@/lib/verify/auth";
-import { deleteAllFinishedJobs, listJobs, loadPersisted } from "@/lib/verify/store";
+import { deleteAllFinishedJobs, listHistoryJobs, loadPersisted } from "@/lib/verify/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,8 +15,12 @@ export async function GET(req: NextRequest) {
   await loadPersisted();
   const url = new URL(req.url);
   const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 50));
-  const jobs = listJobs(limit);
-  return NextResponse.json({ jobs });
+  const cursor = url.searchParams.get("cursor") || undefined;
+  const page = await listHistoryJobs({ limit, cursor });
+  return NextResponse.json({
+    jobs: page.jobs,
+    nextCursor: page.nextCursor,
+  });
 }
 
 export async function DELETE(req: NextRequest) {

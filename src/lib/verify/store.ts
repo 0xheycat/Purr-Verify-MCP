@@ -1,15 +1,23 @@
-// In-memory job store with lightweight JSON file persistence.
+// Runtime job cache backed by durable SQLite WAL history and legacy JSON files.
 //
-// MVP note: state lives in module memory. Completed/failed jobs are also written
-// to <dataDir>/jobs/<jobId>.json so they survive dev-server restarts. Running
-// jobs that were interrupted by a restart cannot be resumed (they are marked
-// "failed" with an interruption note on next startup).
+// Source workspaces remain disposable. Job metadata, redacted logs, cleanup
+// evidence, and terminal state are persisted independently so agents can
+// inspect prior verification work after cleanup or restart.
 
 import { randomUUID } from "node:crypto";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ChildProcess } from "node:child_process";
 import { getConfig } from "./config";
+import {
+  getHistoryDatabase,
+  historyBackendStatus,
+  isTerminalStatus,
+  type HistoryBackendStatus,
+  type HistoryPage,
+  type HistoryQuery,
+  type VerificationHistorySummary,
+} from "./history-db";
 import type {
   ExecutionRoutingRecord,
   Job,
@@ -28,112 +36,271 @@ interface RuntimeState {
   resolutionProbeModules?: ResolutionProbeModuleRequest[];
 }
 
-const jobs = new Map<string, Job>();
-const runtime = new Map<string, RuntimeState>();
-
-interface PurrVerifyGlobal {
+interface StoreGlobal {
+  __purrVerifyJobs?: Map<string, Job>;
+  __purrVerifyRuntime?: Map<string, RuntimeState>;
+  __purrVerifyLoadPromise?: Promise<void>;
   __purrVerifyLoaded?: boolean;
-}
-function getPurrGlobal(): PurrVerifyGlobal {
-  return globalThis as PurrVerifyGlobal;
+  __purrVerifyPendingPersistence?: Map<string, Job>;
+  __purrVerifyPersistenceTimers?: Map<string, NodeJS.Timeout>;
+  __purrVerifyPersistenceChains?: Map<string, Promise<void>>;
+  __purrVerifyPersistenceError?: string | null;
+  __purrVerifyPersistenceFallback?: "none" | "legacy-json";
 }
 
-let loaded = false;
-const MAX_STORED_JOBS = 200;
-
-function dataDir(): string {
-  return getConfig().dataDir;
+function storeGlobal(): StoreGlobal {
+  return globalThis as StoreGlobal;
 }
+
+const globalStore = storeGlobal();
+const jobs = globalStore.__purrVerifyJobs ?? new Map<string, Job>();
+const runtime = globalStore.__purrVerifyRuntime ?? new Map<string, RuntimeState>();
+const pendingPersistence =
+  globalStore.__purrVerifyPendingPersistence ?? new Map<string, Job>();
+const persistenceTimers =
+  globalStore.__purrVerifyPersistenceTimers ?? new Map<string, NodeJS.Timeout>();
+const persistenceChains =
+  globalStore.__purrVerifyPersistenceChains ?? new Map<string, Promise<void>>();
+
+globalStore.__purrVerifyJobs = jobs;
+globalStore.__purrVerifyRuntime = runtime;
+globalStore.__purrVerifyPendingPersistence = pendingPersistence;
+globalStore.__purrVerifyPersistenceTimers = persistenceTimers;
+globalStore.__purrVerifyPersistenceChains = persistenceChains;
+
+const MAX_MEMORY_TERMINAL_JOBS = 500;
+// Keep active state durable without rewriting a potentially large job record
+// for every stdout chunk during an 8-9 hour smoke or soak run.
+const PERSIST_DEBOUNCE_MS = 5_000;
 
 function jobsDir(): string {
-  return path.join(dataDir(), "jobs");
+  return path.join(getConfig().dataDir, "jobs");
 }
 
-async function ensureDirs(): Promise<void> {
+async function ensureLegacyDir(): Promise<void> {
   await fs.mkdir(jobsDir(), { recursive: true });
 }
 
-async function persist(job: Job): Promise<void> {
+function cloneJob(job: Job): Job {
+  return JSON.parse(JSON.stringify(job)) as Job;
+}
+
+async function writeLegacyJson(job: Job): Promise<void> {
+  await ensureLegacyDir();
+  const file = path.join(jobsDir(), `${job.jobId}.json`);
+  const temp = `${file}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
+  await fs.writeFile(temp, JSON.stringify(job, null, 2), "utf8");
+  await fs.rename(temp, file);
+}
+
+async function persistSnapshot(job: Job): Promise<void> {
   try {
-    await ensureDirs();
-    const file = path.join(jobsDir(), `${job.jobId}.json`);
-    await fs.writeFile(file, JSON.stringify(job, null, 2), "utf8");
-  } catch {
-    // Persistence is best-effort; never let it break the API.
+    await (await getHistoryDatabase()).upsert(job);
+    globalStore.__purrVerifyPersistenceError = null;
+    globalStore.__purrVerifyPersistenceFallback = "none";
+    return;
+  } catch (error) {
+    const sqliteError = error instanceof Error ? error.message : String(error);
+    try {
+      await writeLegacyJson(job);
+      globalStore.__purrVerifyPersistenceError = sqliteError;
+      globalStore.__purrVerifyPersistenceFallback = "legacy-json";
+      return;
+    } catch (fallbackError) {
+      const jsonError =
+        fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+      globalStore.__purrVerifyPersistenceError = `${sqliteError}; legacy JSON fallback failed: ${jsonError}`;
+      globalStore.__purrVerifyPersistenceFallback = "legacy-json";
+      throw new Error(globalStore.__purrVerifyPersistenceError);
+    }
   }
 }
 
-export async function loadPersisted(): Promise<void> {
-  const g = getPurrGlobal();
-  const isFirstLoad = !g.__purrVerifyLoaded;
-  g.__purrVerifyLoaded = true;
-  loaded = true;
-  try {
-    const dir = jobsDir();
-    const files = await fs.readdir(dir).catch(() => [] as string[]);
-    const recent = files.filter((f) => f.endsWith(".json")).slice(-MAX_STORED_JOBS);
-    const diskIds = new Set(recent.map((f) => f.replace(/\.json$/, "")));
-    for (const id of jobs.keys()) {
-      const j = jobs.get(id);
-      const isActive = j && (j.status === "running" || j.status === "queued");
-      if (!diskIds.has(id) && !isActive) {
-        jobs.delete(id);
-        runtime.delete(id);
-      }
-    }
-    for (const f of recent) {
-      try {
-        const raw = await fs.readFile(path.join(dir, f), "utf8");
-        const job = JSON.parse(raw) as Job;
-        if (isFirstLoad && (job.status === "running" || job.status === "queued")) {
-          job.status = "failed";
-          job.error = "Job was interrupted by server restart";
-          job.finishedAt = job.finishedAt || new Date().toISOString();
-          for (const c of job.commands) {
-            if (c.status === "pending" || c.status === "running") {
-              c.status = "skipped";
-            }
-          }
-          void persist(job);
-        }
-        const existing = jobs.get(job.jobId);
-        const existingDeliveries = existing?.webhookDeliveries?.length ?? 0;
-        const diskDeliveries = job.webhookDeliveries?.length ?? 0;
-        const existingTags = existing?.tags?.length ?? 0;
-        const diskTags = job.tags?.length ?? 0;
-        const existingAnnotations = existing?.annotations?.length ?? 0;
-        const diskAnnotations = job.annotations?.length ?? 0;
-        if (
-          existing &&
-          existing.status === job.status &&
-          existing.finishedAt === job.finishedAt &&
-          existing.durationMs === job.durationMs &&
-          existing.commands.length === job.commands.length &&
-          existing.commands.every((c, i) => c.status === job.commands[i].status) &&
-          existingDeliveries === diskDeliveries &&
-          existingTags === diskTags &&
-          existingAnnotations === diskAnnotations
-        ) {
-          continue;
-        }
-        jobs.set(job.jobId, job);
-        if (!runtime.has(job.jobId)) {
-          runtime.set(job.jobId, {
-            currentChild: null,
-            jobTimer: null,
-            cancelRequested: false,
-            githubToken: null,
-            env: null,
-            resolutionProbePackages: [],
-          });
-        }
-      } catch {
-        // skip corrupt file
-      }
-    }
-  } catch {
-    // ignore
+function startPersistenceFlush(jobId: string): Promise<void> {
+  const timer = persistenceTimers.get(jobId);
+  if (timer) {
+    clearTimeout(timer);
+    persistenceTimers.delete(jobId);
   }
+  const snapshot = pendingPersistence.get(jobId);
+  if (!snapshot) return persistenceChains.get(jobId) ?? Promise.resolve();
+  pendingPersistence.delete(jobId);
+  const previous = persistenceChains.get(jobId) ?? Promise.resolve();
+  const next = previous
+    .catch(() => {})
+    .then(() => persistSnapshot(snapshot))
+    .catch(() => {
+      // Persistence status is exposed through health. Runtime execution must
+      // continue even when both history backends are temporarily unavailable.
+    })
+    .then(async () => {
+      if (pendingPersistence.has(jobId)) {
+        await startPersistenceFlush(jobId);
+      }
+    })
+    .finally(() => {
+      if (!pendingPersistence.has(jobId) && persistenceChains.get(jobId) === next) {
+        persistenceChains.delete(jobId);
+      }
+    });
+  persistenceChains.set(jobId, next);
+  return next;
+}
+
+function schedulePersistence(job: Job, immediate = false): void {
+  pendingPersistence.set(job.jobId, cloneJob(job));
+  if (immediate) {
+    void startPersistenceFlush(job.jobId);
+    return;
+  }
+  if (persistenceTimers.has(job.jobId)) return;
+  const timer = setTimeout(() => {
+    persistenceTimers.delete(job.jobId);
+    void startPersistenceFlush(job.jobId);
+  }, PERSIST_DEBOUNCE_MS);
+  timer.unref?.();
+  persistenceTimers.set(job.jobId, timer);
+}
+
+export async function flushJobPersistence(jobId: string): Promise<void> {
+  await startPersistenceFlush(jobId);
+  while (pendingPersistence.has(jobId) || persistenceChains.has(jobId)) {
+    const chain = persistenceChains.get(jobId);
+    if (chain) await chain;
+    if (pendingPersistence.has(jobId)) await startPersistenceFlush(jobId);
+  }
+}
+
+function cacheJob(job: Job): Job {
+  jobs.set(job.jobId, job);
+  if (!runtime.has(job.jobId)) {
+    runtime.set(job.jobId, {
+      currentChild: null,
+      backgroundChildren: [],
+      jobTimer: null,
+      cancelRequested: false,
+      githubToken: null,
+      env: null,
+      resolutionProbePackages: [],
+      resolutionProbeModules: [],
+    });
+  }
+  return job;
+}
+
+async function readLegacyJobs(): Promise<Job[]> {
+  const files = await fs.readdir(jobsDir()).catch(() => [] as string[]);
+  const loaded: Job[] = [];
+  for (const file of files) {
+    if (!file.endsWith(".json")) continue;
+    try {
+      const raw = await fs.readFile(path.join(jobsDir(), file), "utf8");
+      const job = JSON.parse(raw) as Job;
+      if (job?.jobId && job?.queuedAt && Array.isArray(job.commands)) loaded.push(job);
+    } catch {
+      // Keep corrupt files untouched for manual recovery.
+    }
+  }
+  return loaded.sort((a, b) =>
+    a.queuedAt === b.queuedAt
+      ? b.jobId.localeCompare(a.jobId)
+      : b.queuedAt.localeCompare(a.queuedAt)
+  );
+}
+
+async function markInterrupted(job: Job): Promise<Job> {
+  if (job.status === "queued") {
+    cacheJob(job);
+    return job;
+  }
+  if (job.status !== "running") return job;
+  job.status = "failed";
+  job.error = "Job was interrupted by server restart";
+  job.finishedAt = job.finishedAt || new Date().toISOString();
+  if (job.startedAt) {
+    job.durationMs = Math.max(
+      0,
+      new Date(job.finishedAt).getTime() - new Date(job.startedAt).getTime()
+    );
+  }
+  for (const command of job.commands) {
+    if (command.status === "pending" || command.status === "running") {
+      command.status = "skipped";
+    }
+  }
+  job.summary = {
+    passed: false,
+    failedCommand: job.summary?.failedCommand ?? null,
+  };
+  cacheJob(job);
+  schedulePersistence(job, true);
+  await flushJobPersistence(job.jobId);
+  return job;
+}
+
+async function loadAllActiveFromDatabase(
+  status: "queued" | "running"
+): Promise<Job[]> {
+  const database = await getHistoryDatabase();
+  const active: Job[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await database.listFull({ status, limit: 200, cursor });
+    active.push(...page.jobs);
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor);
+  return active;
+}
+
+export async function loadPersisted(): Promise<void> {
+  if (globalStore.__purrVerifyLoaded) return;
+  if (globalStore.__purrVerifyLoadPromise) {
+    await globalStore.__purrVerifyLoadPromise;
+    return;
+  }
+  globalStore.__purrVerifyLoadPromise = (async () => {
+    let loadedFromSqlite = false;
+    try {
+      const db = await getHistoryDatabase();
+      await db.migrateLegacyDirectory(jobsDir());
+      const [recent, running, queued] = await Promise.all([
+        db.listFull({ limit: 200 }),
+        loadAllActiveFromDatabase("running"),
+        loadAllActiveFromDatabase("queued"),
+      ]);
+      const merged = new Map<string, Job>();
+      for (const job of recent.jobs) merged.set(job.jobId, job);
+      for (const job of running) merged.set(job.jobId, job);
+      for (const job of queued) merged.set(job.jobId, job);
+      for (const job of merged.values()) cacheJob(job);
+      loadedFromSqlite = true;
+    } catch (error) {
+      globalStore.__purrVerifyPersistenceError =
+        error instanceof Error ? error.message : String(error);
+    }
+
+    if (!loadedFromSqlite) {
+      const legacy = await readLegacyJobs();
+      const active = legacy.filter(
+        (job) => job.status === "running" || job.status === "queued"
+      );
+      const recentTerminal = legacy
+        .filter((job) => job.status !== "running" && job.status !== "queued")
+        .slice(0, MAX_MEMORY_TERMINAL_JOBS);
+      for (const job of [...active, ...recentTerminal]) cacheJob(job);
+    }
+
+    for (const job of Array.from(jobs.values())) {
+      if (job.status === "running" || job.status === "queued") {
+        await markInterrupted(job);
+      }
+    }
+    trimOldJobs();
+    globalStore.__purrVerifyLoaded = true;
+  })().finally(() => {
+    delete globalStore.__purrVerifyLoadPromise;
+  });
+  await globalStore.__purrVerifyLoadPromise;
 }
 
 export function createJob(input: {
@@ -201,7 +368,7 @@ export function createJob(input: {
     resolutionProbePackages: input.resolutionProbePackages ?? [],
     resolutionProbeModules: input.resolutionProbeModules ?? [],
   });
-  void persist(job);
+  schedulePersistence(job, true);
   return job;
 }
 
@@ -209,17 +376,73 @@ export function getJob(jobId: string): Job | undefined {
   return jobs.get(jobId);
 }
 
+export async function getJobDurable(jobId: string): Promise<Job | undefined> {
+  await loadPersisted();
+  const cached = jobs.get(jobId);
+  if (cached) return cached;
+  try {
+    const job = await (await getHistoryDatabase()).get(jobId);
+    if (job) {
+      cacheJob(job);
+      trimOldJobs();
+      return job;
+    }
+  } catch {
+    // Fall through to legacy JSON.
+  }
+  try {
+    const raw = await fs.readFile(path.join(jobsDir(), `${jobId}.json`), "utf8");
+    const job = JSON.parse(raw) as Job;
+    cacheJob(job);
+    trimOldJobs();
+    return job;
+  } catch {
+    return undefined;
+  }
+}
+
 export function listJobs(limit = 50): Job[] {
   return Array.from(jobs.values())
-    .sort((a, b) => (b.queuedAt > a.queuedAt ? 1 : -1))
+    .sort((a, b) =>
+      a.queuedAt === b.queuedAt
+        ? b.jobId.localeCompare(a.jobId)
+        : b.queuedAt.localeCompare(a.queuedAt)
+    )
     .slice(0, limit);
+}
+
+export async function listHistorySummaries(
+  query: HistoryQuery = {}
+): Promise<HistoryPage<VerificationHistorySummary>> {
+  await loadPersisted();
+  return (await getHistoryDatabase()).listSummaries(query);
+}
+
+export async function listHistoryJobs(
+  query: HistoryQuery = {}
+): Promise<HistoryPage<Job>> {
+  await loadPersisted();
+  return (await getHistoryDatabase()).listFull(query);
+}
+
+export async function getLatestHistoryJob(
+  query: Omit<HistoryQuery, "limit" | "cursor"> = {}
+): Promise<Job | undefined> {
+  await loadPersisted();
+  return (await getHistoryDatabase()).latest(query).then((job) => job ?? undefined);
 }
 
 export function updateJob(jobId: string, patch: Partial<Job>): Job | undefined {
   const job = jobs.get(jobId);
   if (!job) return undefined;
   Object.assign(job, patch);
-  void persist(job);
+  const immediate =
+    isTerminalStatus(job.status) ||
+    patch.status === "running" ||
+    patch.cleanupStatus === "done" ||
+    patch.cleanupStatus === "partial" ||
+    patch.cleanupStatus === "failed";
+  schedulePersistence(job, immediate);
   return job;
 }
 
@@ -231,55 +454,45 @@ export function setJobStatus(jobId: string, status: JobStatus): void {
   const job = jobs.get(jobId);
   if (!job) return;
   job.status = status;
-  void persist(job);
+  schedulePersistence(job, status === "running" || isTerminalStatus(status));
 }
 
 export function activeJobCount(): number {
-  let n = 0;
-  for (const j of jobs.values()) {
-    if (j.status === "running") n++;
-  }
-  return n;
+  let count = 0;
+  for (const job of jobs.values()) if (job.status === "running") count++;
+  return count;
 }
 
 export function queuedJobCount(): number {
-  let n = 0;
-  for (const j of jobs.values()) {
-    if (j.status === "queued") n++;
-  }
-  return n;
+  let count = 0;
+  for (const job of jobs.values()) if (job.status === "queued") count++;
+  return count;
 }
 
 export function getQueuePosition(jobId: string): number | null {
   const job = jobs.get(jobId);
   if (!job || job.status !== "queued") return null;
   const queued = Array.from(jobs.values())
-    .filter((j) => j.status === "queued")
-    .sort((a, b) => (a.queuedAt > b.queuedAt ? 1 : a.queuedAt < b.queuedAt ? -1 : 0));
-  const idx = queued.findIndex((j) => j.jobId === jobId);
-  return idx === -1 ? null : idx + 1;
+    .filter((candidate) => candidate.status === "queued")
+    .sort((a, b) =>
+      a.queuedAt === b.queuedAt
+        ? a.jobId.localeCompare(b.jobId)
+        : a.queuedAt.localeCompare(b.queuedAt)
+    );
+  const index = queued.findIndex((candidate) => candidate.jobId === jobId);
+  return index === -1 ? null : index + 1;
 }
 
 export function getQueuedTotal(): number {
-  let n = 0;
-  for (const j of jobs.values()) {
-    if (j.status === "queued") n++;
-  }
-  return n;
+  return queuedJobCount();
 }
 
 export function getAverageJobDurationMs(): number | null {
   let sum = 0;
   let count = 0;
-  for (const j of jobs.values()) {
-    if (
-      (j.status === "success" ||
-        j.status === "failed" ||
-        j.status === "canceled" ||
-        j.status === "timeout") &&
-      typeof j.durationMs === "number"
-    ) {
-      sum += j.durationMs;
+  for (const job of jobs.values()) {
+    if (isTerminalStatus(job.status) && typeof job.durationMs === "number") {
+      sum += job.durationMs;
       count++;
     }
   }
@@ -290,15 +503,54 @@ export function totalJobCount(): number {
   return jobs.size;
 }
 
-export function clearRuntime(jobId: string): void {
-  const rt = runtime.get(jobId);
-  if (!rt) return;
-  if (rt.jobTimer) {
-    clearTimeout(rt.jobTimer);
-    rt.jobTimer = null;
+export async function totalDurableJobCount(): Promise<number> {
+  await loadPersisted();
+  try {
+    return await (await getHistoryDatabase()).count();
+  } catch {
+    return jobs.size;
   }
-  rt.currentChild = null;
-  for (const child of rt.backgroundChildren ?? []) {
+}
+
+export async function verificationHistoryStatus(): Promise<
+  HistoryBackendStatus & {
+    pendingWrites: number;
+    lastPersistenceError: string | null;
+    fallback: "none" | "legacy-json";
+    progressCheckpointMs: number;
+  }
+> {
+  let status: HistoryBackendStatus;
+  try {
+    status = await historyBackendStatus();
+  } catch (error) {
+    status = {
+      backend: "sqlite-wal",
+      databasePath: path.join(getConfig().dataDir, "verify-history.sqlite"),
+      ready: false,
+      journalMode: null,
+      lastError: error instanceof Error ? error.message : String(error),
+    };
+  }
+  return {
+    ...status,
+    pendingWrites: pendingPersistence.size + persistenceChains.size,
+    lastPersistenceError:
+      globalStore.__purrVerifyPersistenceError ?? status.lastError ?? null,
+    fallback: globalStore.__purrVerifyPersistenceFallback ?? "none",
+    progressCheckpointMs: PERSIST_DEBOUNCE_MS,
+  };
+}
+
+export function clearRuntime(jobId: string): void {
+  const state = runtime.get(jobId);
+  if (!state) return;
+  if (state.jobTimer) {
+    clearTimeout(state.jobTimer);
+    state.jobTimer = null;
+  }
+  state.currentChild = null;
+  for (const child of state.backgroundChildren ?? []) {
     try {
       if (process.platform !== "win32" && child.pid) {
         process.kill(-child.pid, "SIGTERM");
@@ -313,56 +565,66 @@ export function clearRuntime(jobId: string): void {
       }
     }
   }
-  rt.backgroundChildren = [];
-  rt.githubToken = null;
-  rt.env = null;
+  state.backgroundChildren = [];
+  state.githubToken = null;
+  state.env = null;
 }
 
 export function trimOldJobs(): void {
-  if (jobs.size <= MAX_STORED_JOBS) return;
-  const sorted = Array.from(jobs.values()).sort((a, b) =>
-    a.queuedAt > b.queuedAt ? 1 : -1
-  );
-  const toRemove = sorted.slice(0, jobs.size - MAX_STORED_JOBS);
-  for (const j of toRemove) {
-    jobs.delete(j.jobId);
-    runtime.delete(j.jobId);
+  const terminal = Array.from(jobs.values())
+    .filter((job) => isTerminalStatus(job.status))
+    .sort((a, b) =>
+      a.queuedAt === b.queuedAt
+        ? b.jobId.localeCompare(a.jobId)
+        : b.queuedAt.localeCompare(a.queuedAt)
+    );
+  for (const job of terminal.slice(MAX_MEMORY_TERMINAL_JOBS)) {
+    jobs.delete(job.jobId);
+    runtime.delete(job.jobId);
   }
 }
 
 export async function deleteJob(jobId: string): Promise<boolean> {
-  const job = jobs.get(jobId);
+  const job = await getJobDurable(jobId);
   if (!job) return false;
   if (job.status === "running" || job.status === "queued") return false;
   jobs.delete(jobId);
   runtime.delete(jobId);
-  try {
-    const file = path.join(jobsDir(), `${jobId}.json`);
-    await fs.unlink(file).catch(() => {});
-  } catch {
-    // best-effort
-  }
+  pendingPersistence.delete(jobId);
+  const timer = persistenceTimers.get(jobId);
+  if (timer) clearTimeout(timer);
+  persistenceTimers.delete(jobId);
+  await (await getHistoryDatabase()).delete(jobId).catch(() => false);
+  await fs.unlink(path.join(jobsDir(), `${jobId}.json`)).catch(() => {});
   return true;
 }
 
 export async function deleteAllFinishedJobs(): Promise<number> {
-  let count = 0;
-  const toDelete: string[] = [];
-  for (const [id, job] of jobs) {
-    if (job.status !== "running" && job.status !== "queued") {
-      toDelete.push(id);
-    }
+  await loadPersisted();
+  let memoryDeleted = 0;
+  for (const [jobId, job] of Array.from(jobs.entries())) {
+    if (job.status === "running" || job.status === "queued") continue;
+    jobs.delete(jobId);
+    runtime.delete(jobId);
+    pendingPersistence.delete(jobId);
+    const timer = persistenceTimers.get(jobId);
+    if (timer) clearTimeout(timer);
+    persistenceTimers.delete(jobId);
+    memoryDeleted++;
   }
-  for (const id of toDelete) {
-    jobs.delete(id);
-    runtime.delete(id);
-    count++;
+  const databaseDeleted = await (await getHistoryDatabase()).deleteFinished().catch(() => 0);
+  const files = await fs.readdir(jobsDir()).catch(() => [] as string[]);
+  for (const file of files) {
+    if (!file.endsWith(".json")) continue;
     try {
-      const file = path.join(jobsDir(), `${id}.json`);
-      await fs.unlink(file).catch(() => {});
+      const raw = await fs.readFile(path.join(jobsDir(), file), "utf8");
+      const job = JSON.parse(raw) as Job;
+      if (job.status !== "running" && job.status !== "queued") {
+        await fs.unlink(path.join(jobsDir(), file)).catch(() => {});
+      }
     } catch {
-      // best-effort
+      // Leave corrupt legacy files for manual recovery.
     }
   }
-  return count;
+  return Math.max(memoryDeleted, databaseDeleted);
 }

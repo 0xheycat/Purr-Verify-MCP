@@ -29,6 +29,7 @@ import {
 import {
   clearRuntime,
   createJob,
+  flushJobPersistence,
   getJob,
   getRuntime,
   listJobs,
@@ -107,7 +108,7 @@ async function sweepOrphanWorkspaces(force = false): Promise<void> {
   lastJanitorRunMs = Date.now();
   try {
     const activeJobIds = new Set(
-      listJobs(1000)
+      listJobs(Number.MAX_SAFE_INTEGER)
         .filter((job) => job.status === "queued" || job.status === "running")
         .map((job) => job.jobId)
     );
@@ -1140,6 +1141,7 @@ async function runJob(jobId: string): Promise<void> {
         cleanupStatus: cleanup.status,
         cleanup,
       });
+      await flushJobPersistence(jobId);
     }
   }
 }
@@ -1419,9 +1421,14 @@ export async function ensureScheduler(): Promise<void> {
 
 async function drain(): Promise<void> {
   const cfg = getConfig();
-  const all = listJobs(500);
+  const all = listJobs(Number.MAX_SAFE_INTEGER);
   const running = all.filter((j) => j.status === "running").length;
-  const queued = all.filter((j) => j.status === "queued");
+  const queued = all
+    .filter((j) => j.status === "queued")
+    .sort((a, b) =>
+      a.queuedAt === b.queuedAt
+        ? a.jobId.localeCompare(b.jobId)
+        : a.queuedAt.localeCompare(b.queuedAt));
   let slots = cfg.maxConcurrentJobs - running;
   for (const job of queued) {
     if (slots <= 0) break;
@@ -1468,6 +1475,7 @@ export interface CreateJobInput {
 export async function enqueueJob(input: CreateJobInput): Promise<Job> {
   await loadPersisted();
   const job = createJob(input);
+  await flushJobPersistence(job.jobId);
   void ensureScheduler();
   return job;
 }
@@ -1502,6 +1510,7 @@ export async function enqueueJob(input: CreateJobInput): Promise<Job> {
 export async function runJobSync(input: CreateJobInput): Promise<Job> {
   await loadPersisted();
   const job = createJob(input);
+  await flushJobPersistence(job.jobId);
   // Mark running immediately to prevent the background scheduler from also
   // picking up this job on its next drain tick (1s interval). The scheduler
   // only drains jobs with status "queued".
@@ -1546,5 +1555,6 @@ export function requestCancel(jobId: string): boolean {
   } else {
     updateJob(jobId, { error: "cancel requested" });
   }
+  void flushJobPersistence(jobId);
   return true;
 }

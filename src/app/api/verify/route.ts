@@ -82,7 +82,8 @@ export async function POST(req: NextRequest) {
 
 export async function GET() {
   // Convenience: GET /api/verify returns recent jobs (alias of /api/jobs).
-  const { listJobs, loadPersisted } = await import("@/lib/verify/store");
+  const { listHistoryJobs, loadPersisted } = await import("@/lib/verify/store");
   await loadPersisted();
-  return NextResponse.json({ jobs: listJobs(50) });
+  const page = await listHistoryJobs({ limit: 50 });
+  return NextResponse.json(page);
 }

@@ -4,7 +4,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { badRequest, checkAuth, notFound, unauthorized } from "@/lib/verify/auth";
-import { deleteJob, getJob, loadPersisted } from "@/lib/verify/store";
+import { deleteJob, getJobDurable, loadPersisted } from "@/lib/verify/store";
 import { updateJobTags } from "@/lib/verify/executor";
 import { validateTags } from "@/lib/verify/mcp";
 import { jobToMarkdown } from "@/lib/verify/markdown";
@@ -21,7 +21,7 @@ export async function GET(
 
   await loadPersisted();
   const { jobId } = await ctx.params;
-  const job = getJob(jobId);
+  const job = await getJobDurable(jobId);
   if (!job) return notFound(`job not found: ${jobId}`);
 
   // Optional ?format=markdown returns a PR-ready summary.
@@ -41,7 +41,7 @@ export async function PATCH(
 
   await loadPersisted();
   const { jobId } = await ctx.params;
-  const existing = getJob(jobId);
+  const existing = await getJobDurable(jobId);
   if (!existing) return notFound(`job not found: ${jobId}`);
 
   let body: { tags?: unknown };
@@ -75,7 +75,7 @@ export async function DELETE(
 
   await loadPersisted();
   const { jobId } = await ctx.params;
-  const job = getJob(jobId);
+  const job = await getJobDurable(jobId);
   if (!job) return notFound(`job not found: ${jobId}`);
 
   if (job.status === "running" || job.status === "queued") {

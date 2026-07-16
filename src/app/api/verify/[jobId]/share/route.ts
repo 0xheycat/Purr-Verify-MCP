@@ -4,7 +4,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { badRequest, checkAuth, notFound, unauthorized } from "@/lib/verify/auth";
-import { getJob, loadPersisted } from "@/lib/verify/store";
+import { getJobDurable, loadPersisted } from "@/lib/verify/store";
 import {
   createShareToken,
   listShareTokensForJob,
@@ -27,7 +27,7 @@ export async function POST(
   await loadPersisted();
   const { jobId } = await ctx.params;
 
-  const job = getJob(jobId);
+  const job = await getJobDurable(jobId);
   if (!job) return notFound(`job not found: ${jobId}`);
 
   // Optional body: { ttlHours?: number, note?: string }
@@ -84,7 +84,7 @@ export async function GET(
 
   await loadPersisted();
   const { jobId } = await ctx.params;
-  const job = getJob(jobId);
+  const job = await getJobDurable(jobId);
   if (!job) return notFound(`job not found: ${jobId}`);
 
   const tokens = await listShareTokensForJob(jobId);
@@ -119,7 +119,7 @@ export async function DELETE(
 
   await loadPersisted();
   const { jobId } = await ctx.params;
-  const job = getJob(jobId);
+  const job = await getJobDurable(jobId);
   if (!job) return notFound(`job not found: ${jobId}`);
 
   const n = await revokeAllForJob(jobId);

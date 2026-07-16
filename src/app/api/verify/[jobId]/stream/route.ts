@@ -6,7 +6,7 @@
 
 import { NextRequest } from "next/server";
 import { checkAuth, unauthorized, notFound } from "@/lib/verify/auth";
-import { getJob, loadPersisted } from "@/lib/verify/store";
+import { getJob, getJobDurable, loadPersisted } from "@/lib/verify/store";
 import type { JobStatus } from "@/lib/verify/types";
 
 export const runtime = "nodejs";
@@ -29,7 +29,7 @@ export async function GET(
 
   await loadPersisted();
   const { jobId } = await ctx.params;
-  const initialJob = getJob(jobId);
+  const initialJob = await getJobDurable(jobId);
   if (!initialJob) return notFound(`job not found: ${jobId}`);
 
   // If the job is already in a terminal state, return a single event and close.

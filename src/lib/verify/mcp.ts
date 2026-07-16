@@ -14,9 +14,10 @@ import { MAX_LONG_RUN_TIMEOUT_MS, VERSION, getConfig, isConfigured, isRepoAllowe
 import { checkAuth, unauthorized } from "./auth";
 import { validateCommands, listPatterns } from "./allowlist";
 import { enqueueJob, requestCancel, runJobSync } from "./executor";
-import { getJob, listJobs, loadPersisted } from "./store";
-import { activeJobCount, queuedJobCount, totalJobCount } from "./store";
+import { getJob, getJobDurable, listJobs, loadPersisted } from "./store";
+import { activeJobCount, queuedJobCount, totalDurableJobCount, verificationHistoryStatus } from "./store";
 import { runnerTools } from "./system-tools";
+import { HISTORY_MCP_TOOLS, handleHistoryMcpTool } from "./history-mcp";
 import {
   createShareToken,
   listShareTokensForJob,
@@ -50,6 +51,7 @@ interface ToolDef {
 }
 
 const TOOLS: ToolDef[] = [
+  ...HISTORY_MCP_TOOLS,
   {
     name: "create_verification_job",
     description:
@@ -129,10 +131,18 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: "list_verification_jobs",
-    description: "List recent verification jobs (most recent first).",
+    description: "List durable verification history with deterministic cursor pagination. Returns compact summaries by default; use view='full' to preserve the existing full-job listing capability.",
     inputSchema: {
       type: "object",
-      properties: { limit: { type: "number", default: 50 } },
+      properties: {
+        limit: { type: "number", default: 50 },
+        cursor: { type: "string", description: "Opaque cursor returned by the previous page." },
+        view: {
+          type: "string",
+          enum: ["summary", "full"],
+          default: "summary",
+        },
+      },
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
@@ -264,19 +274,29 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
       const name = params.name;
       const args = params.arguments || {};
       try {
+        const historyResult = await handleHistoryMcpTool(name, args);
+        if (historyResult.handled) {
+          return rpcResult(rid, {
+            content: [toText(historyResult.payload)],
+            isError: historyResult.isError === true,
+          });
+        }
         switch (name) {
           case "health_check": {
             await loadPersisted();
             const cfg = getConfig();
             const configured = isConfigured();
             const tools = await runnerTools();
+            const durableTotalJobs = await totalDurableJobCount();
+            const historyStorage = await verificationHistoryStatus();
             const health: HealthResponse = {
               status: "ok",
               service: "purr-verify-mcp",
               time: new Date().toISOString(),
               activeJobs: activeJobCount(),
               queuedJobs: queuedJobCount(),
-              totalJobs: totalJobCount(),
+              totalJobs: durableTotalJobs,
+              historyStorage,
               version: VERSION,
               allowedRepos: cfg.allowedRepos,
               allowAllRepos: cfg.allowAllRepos,
@@ -389,7 +409,7 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
                 isError: true,
               });
             }
-            const job = getJob(jobId);
+            const job = await getJobDurable(jobId);
             if (!job) {
               return rpcResult(rid, {
                 content: [toText({ error: "not_found", message: `Job not found: ${jobId}` })],
