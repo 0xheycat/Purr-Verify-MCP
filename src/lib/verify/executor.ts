@@ -1141,6 +1141,7 @@ async function runJob(jobId: string): Promise<void> {
         cleanupStatus: cleanup.status,
         cleanup,
       });
+      await flushJobPersistence(jobId);
     }
   }
 }
