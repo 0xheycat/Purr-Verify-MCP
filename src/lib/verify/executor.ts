@@ -1131,12 +1131,24 @@ async function runJob(jobId: string): Promise<void> {
   } catch (e) {
     finalize(jobId, "failed", `Executor error: ${(e as Error).message}`);
   } finally {
-    // Always cleanup workspace.
+    const cleanupStartedAt = nowIso();
+    updateJob(jobId, {
+      cleanupStatus: "running",
+      cleanup: {
+        status: "running",
+        startedAt: cleanupStartedAt,
+        finishedAt: null,
+      },
+    });
+    await terminateRuntimeProcesses(jobId, 1000);
     clearRuntime(jobId);
-    await removeDir(workdir);
-    await removeDir(cacheDir);
-    const j = getJob(jobId);
-    if (j) updateJob(jobId, { cleanupStatus: "done" });
+    const cleanup = await cleanupJobDirectories(workdir, cacheDir);
+    if (getJob(jobId)) {
+      updateJob(jobId, {
+        cleanupStatus: cleanup.status,
+        cleanup,
+      });
+    }
   }
 }
 
