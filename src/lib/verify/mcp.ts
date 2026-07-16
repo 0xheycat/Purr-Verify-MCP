@@ -23,6 +23,7 @@ import {
   revokeAllForJob,
 } from "./share";
 import type { HealthResponse, Job, ResolutionProbeModuleRequest, VerifyRequest } from "./types";
+import { resolveExecutionMode } from "./execution-policy";
 
 export interface JsonRpcRequest {
   jsonrpc?: string;
