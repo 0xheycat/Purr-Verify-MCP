@@ -82,6 +82,23 @@ function killChildTree(child: ChildProcess, signal: NodeJS.Signals): void {
   }
 }
 
+async function terminateRuntimeProcesses(jobId: string, graceMs = 3000): Promise<void> {
+  const rt = getRuntime(jobId);
+  if (!rt) return;
+  const children = new Set<ChildProcess>();
+  if (rt.currentChild) children.add(rt.currentChild);
+  for (const child of rt.backgroundChildren ?? []) children.add(child);
+  if (children.size === 0) return;
+
+  for (const child of children) killChildTree(child, "SIGTERM");
+  await new Promise((resolve) => setTimeout(resolve, graceMs));
+  for (const child of children) {
+    if (child.exitCode === null && child.signalCode === null) {
+      killChildTree(child, "SIGKILL");
+    }
+  }
+}
+
 // Run a single program (no shell) with stdout/stderr capture + redaction.
 //
 // `opts.cleanNodeEnv` (used for the repo's OWN commands: bun install / bun test
