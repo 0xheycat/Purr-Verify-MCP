@@ -1399,6 +1399,7 @@ export async function retryCallback(jobId: string): Promise<{
 export async function ensureScheduler(): Promise<void> {
   await loadPersisted();
   if (schedulerRunning) return;
+  await sweepOrphanWorkspaces(true);
   schedulerRunning = true;
   // Loop forever, draining the queue subject to concurrency.
   // Use setImmediate to yield between iterations.
