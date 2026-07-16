@@ -53,7 +53,7 @@ const TOOLS: ToolDef[] = [
   {
     name: "create_verification_job",
     description:
-      "Create a verification job that clones a repo/ref and runs allowlisted commands (e.g. bun install, bun test, bun run build). In async mode (default), returns a jobId and statusUrl immediately. In sync mode, runs the job to completion inline and returns the full final job result (including commands, summary, cleanupStatus). AUTH: send your Bearer token per the server's AUTH_MODE — server_token mode expects VERIFY_TOKEN; github_passthrough mode expects a GitHub PAT (the PAT is validated via the GitHub API and used to clone private repos).",
+      "Create a verification job that clones a repo/ref and runs allowlisted commands. mode=auto is the default: one short smoke command can run inline, while long-running or multi-command work is queued. Explicit sync remains available for short work and safely falls back to async for long-running commands instead of rejecting them. AUTH follows the server's configured mode.",
     inputSchema: {
       type: "object",
       properties: {
