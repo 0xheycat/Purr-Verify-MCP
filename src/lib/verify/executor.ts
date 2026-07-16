@@ -49,6 +49,8 @@ import type {
 } from "./types";
 
 let schedulerRunning = false;
+let janitorRunning = false;
+let lastJanitorRunMs = 0;
 
 function nowIso(): string {
   return new Date().toISOString();
