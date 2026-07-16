@@ -10,7 +10,7 @@
 //   - health_check
 
 import { NextRequest, NextResponse } from "next/server";
-import { MAX_LONG_RUN_TIMEOUT_MS, VERSION, effectiveDefaultTimeouts, getConfig, isConfigured, isRepoAllowed, isValidHead, isValidRef, githubTokenSource } from "./config";
+import { MAX_LONG_RUN_TIMEOUT_MS, VERSION, getConfig, isConfigured, isRepoAllowed, isValidHead, isValidRef, githubTokenSource } from "./config";
 import { checkAuth, unauthorized } from "./auth";
 import { validateCommands, listPatterns } from "./allowlist";
 import { enqueueJob, requestCancel, runJobSync } from "./executor";
@@ -23,7 +23,6 @@ import {
   revokeAllForJob,
 } from "./share";
 import type { HealthResponse, Job, ResolutionProbeModuleRequest, VerifyRequest } from "./types";
-import { resolveExecutionMode } from "./execution-policy";
 
 export interface JsonRpcRequest {
   jsonrpc?: string;
