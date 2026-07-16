@@ -99,6 +99,59 @@ async function terminateRuntimeProcesses(jobId: string, graceMs = 3000): Promise
   }
 }
 
+async function sweepOrphanWorkspaces(force = false): Promise<void> {
+  const cfg = getConfig();
+  const intervalMs = Math.max(60_000, Math.min(cfg.cleanupAfterMs, 15 * 60_000));
+  if (janitorRunning || (!force && Date.now() - lastJanitorRunMs < intervalMs)) return;
+  janitorRunning = true;
+  lastJanitorRunMs = Date.now();
+  try {
+    const activeJobIds = new Set(
+      listJobs(1000)
+        .filter((job) => job.status === "queued" || job.status === "running")
+        .map((job) => job.jobId)
+    );
+    const entries = await runWorkspaceJanitor({
+      root: cfg.workdirBase,
+      activeJobIds,
+      olderThanMs: cfg.cleanupAfterMs,
+    });
+    const byJob = new Map<string, typeof entries>();
+    for (const entry of entries) {
+      byJob.set(entry.jobId, [...(byJob.get(entry.jobId) ?? []), entry]);
+    }
+    for (const [jobId, jobEntries] of byJob) {
+      const job = getJob(jobId);
+      if (!job || activeJobIds.has(jobId)) continue;
+      const failed = jobEntries.filter((entry) => !entry.removed);
+      const workspaceEntries = jobEntries.filter((entry) => entry.kind === "workspace");
+      const cacheEntries = jobEntries.filter((entry) => entry.kind === "cache");
+      const status = failed.length === 0 ? "done" : "partial";
+      updateJob(jobId, {
+        cleanupStatus: status,
+        cleanup: {
+          status,
+          startedAt: job.cleanup?.startedAt ?? null,
+          finishedAt: nowIso(),
+          workspaceRemoved:
+            workspaceEntries.length > 0
+              ? workspaceEntries.every((entry) => entry.removed)
+              : job.cleanup?.workspaceRemoved,
+          cacheRemoved:
+            cacheEntries.length > 0
+              ? cacheEntries.every((entry) => entry.removed)
+              : job.cleanup?.cacheRemoved,
+          workspaceError:
+            workspaceEntries.find((entry) => entry.error)?.error ?? null,
+          cacheError: cacheEntries.find((entry) => entry.error)?.error ?? null,
+        },
+      });
+    }
+  } finally {
+    janitorRunning = false;
+  }
+}
+
 // Run a single program (no shell) with stdout/stderr capture + redaction.
 //
 // `opts.cleanNodeEnv` (used for the repo's OWN commands: bun install / bun test
