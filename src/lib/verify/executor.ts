@@ -1505,6 +1505,7 @@ export async function enqueueJob(input: CreateJobInput): Promise<Job> {
 export async function runJobSync(input: CreateJobInput): Promise<Job> {
   await loadPersisted();
   const job = createJob(input);
+  await flushJobPersistence(job.jobId);
   // Mark running immediately to prevent the background scheduler from also
   // picking up this job on its next drain tick (1s interval). The scheduler
   // only drains jobs with status "queued".
