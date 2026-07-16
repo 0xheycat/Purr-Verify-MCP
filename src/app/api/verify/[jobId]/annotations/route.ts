@@ -4,7 +4,7 @@
 import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { badRequest, checkAuth, notFound, unauthorized } from "@/lib/verify/auth";
-import { getJob, loadPersisted, updateJob } from "@/lib/verify/store";
+import { getJobDurable, loadPersisted, updateJob } from "@/lib/verify/store";
 import type { JobAnnotation } from "@/lib/verify/types";
 
 export const runtime = "nodejs";
@@ -19,7 +19,7 @@ export async function POST(
 
   await loadPersisted();
   const { jobId } = await ctx.params;
-  const job = getJob(jobId);
+  const job = await getJobDurable(jobId);
   if (!job) return notFound(`job not found: ${jobId}`);
 
   let body: { text?: unknown; author?: unknown };

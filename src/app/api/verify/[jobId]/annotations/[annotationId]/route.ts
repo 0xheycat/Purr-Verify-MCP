@@ -3,7 +3,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { checkAuth, notFound, unauthorized } from "@/lib/verify/auth";
-import { getJob, loadPersisted, updateJob } from "@/lib/verify/store";
+import { getJobDurable, loadPersisted, updateJob } from "@/lib/verify/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,7 +17,7 @@ export async function DELETE(
 
   await loadPersisted();
   const { jobId, annotationId } = await ctx.params;
-  const job = getJob(jobId);
+  const job = await getJobDurable(jobId);
   if (!job) return notFound(`job not found: ${jobId}`);
 
   const annotations = job.annotations ?? [];
