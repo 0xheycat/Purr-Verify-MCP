@@ -19,6 +19,7 @@ import path from "node:path";
 import { getConfig, isRepoAllowed, isValidHead, isValidRef } from "./config";
 import { parseCommand } from "./parse";
 import { redactText } from "./redact";
+import { cleanupJobDirectories, runWorkspaceJanitor } from "./workspace-cleanup";
 import {
   buildToolchainEnv,
   installStrategy,
