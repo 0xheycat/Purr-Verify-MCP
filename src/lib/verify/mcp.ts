@@ -15,7 +15,7 @@ import { checkAuth, unauthorized } from "./auth";
 import { validateCommands, listPatterns } from "./allowlist";
 import { enqueueJob, requestCancel, runJobSync } from "./executor";
 import { getJob, getJobDurable, listJobs, loadPersisted } from "./store";
-import { activeJobCount, queuedJobCount, totalJobCount } from "./store";
+import { activeJobCount, queuedJobCount, totalDurableJobCount, verificationHistoryStatus } from "./store";
 import { runnerTools } from "./system-tools";
 import { HISTORY_MCP_TOOLS, handleHistoryMcpTool } from "./history-mcp";
 import {
