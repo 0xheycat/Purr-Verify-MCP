@@ -67,9 +67,9 @@ const TOOLS: ToolDef[] = [
         tags: { type: "array", items: { type: "string" }, description: "optional free-form tags for organization (max 10, 1-30 chars, alphanumeric + dash/underscore)" },
         mode: {
           type: "string",
-          enum: ["sync", "async"],
-          default: "async",
-          description: "Execution mode: 'async' (default) queues the job and returns immediately with a jobId; 'sync' runs the job inline and returns the full final result. Sync mode blocks until the job completes (subject to JOB_TIMEOUT_MS).",
+          enum: ["sync", "async", "auto"],
+          default: "auto",
+          description: "Execution mode: 'auto' (default) runs one short smoke command inline and routes long-running or multi-command work to async; 'async' always queues; 'sync' runs short work inline and safely falls back to async for long-running commands.",
         },
         long_run: {
           type: "boolean",
