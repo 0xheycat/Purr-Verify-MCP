@@ -45,6 +45,7 @@ interface StoreGlobal {
   __purrVerifyPersistenceTimers?: Map<string, NodeJS.Timeout>;
   __purrVerifyPersistenceChains?: Map<string, Promise<void>>;
   __purrVerifyPersistenceError?: string | null;
+  __purrVerifyPersistenceFallback?: "none" | "legacy-json";
 }
 
 function storeGlobal(): StoreGlobal {
@@ -68,7 +69,9 @@ globalStore.__purrVerifyPersistenceTimers = persistenceTimers;
 globalStore.__purrVerifyPersistenceChains = persistenceChains;
 
 const MAX_MEMORY_TERMINAL_JOBS = 500;
-const PERSIST_DEBOUNCE_MS = 500;
+// Keep active state durable without rewriting a potentially large job record
+// for every stdout chunk during an 8-9 hour smoke or soak run.
+const PERSIST_DEBOUNCE_MS = 5_000;
 
 function jobsDir(): string {
   return path.join(getConfig().dataDir, "jobs");
@@ -91,30 +94,26 @@ async function writeLegacyJson(job: Job): Promise<void> {
 }
 
 async function persistSnapshot(job: Job): Promise<void> {
-  const results = await Promise.allSettled([
-    getHistoryDatabase().then((db) => db.upsert(job)),
-    writeLegacyJson(job),
-  ]);
-  const failures = results.filter(
-    (result): result is PromiseRejectedResult => result.status === "rejected"
-  );
-  if (failures.length === results.length) {
-    const message = failures
-      .map((failure) =>
-        failure.reason instanceof Error ? failure.reason.message : String(failure.reason)
-      )
-      .join("; ");
-    globalStore.__purrVerifyPersistenceError = message || "all persistence backends failed";
-    throw new Error(globalStore.__purrVerifyPersistenceError);
+  try {
+    await (await getHistoryDatabase()).upsert(job);
+    globalStore.__purrVerifyPersistenceError = null;
+    globalStore.__purrVerifyPersistenceFallback = "none";
+    return;
+  } catch (error) {
+    const sqliteError = error instanceof Error ? error.message : String(error);
+    try {
+      await writeLegacyJson(job);
+      globalStore.__purrVerifyPersistenceError = sqliteError;
+      globalStore.__purrVerifyPersistenceFallback = "legacy-json";
+      return;
+    } catch (fallbackError) {
+      const jsonError =
+        fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+      globalStore.__purrVerifyPersistenceError = `${sqliteError}; legacy JSON fallback failed: ${jsonError}`;
+      globalStore.__purrVerifyPersistenceFallback = "legacy-json";
+      throw new Error(globalStore.__purrVerifyPersistenceError);
+    }
   }
-  globalStore.__purrVerifyPersistenceError =
-    failures.length > 0
-      ? failures
-          .map((failure) =>
-            failure.reason instanceof Error ? failure.reason.message : String(failure.reason)
-          )
-          .join("; ")
-      : null;
 }
 
 function startPersistenceFlush(jobId: string): Promise<void> {
@@ -132,7 +131,7 @@ function startPersistenceFlush(jobId: string): Promise<void> {
     .then(() => persistSnapshot(snapshot))
     .catch(() => {
       // Persistence status is exposed through health. Runtime execution must
-      // continue even when one or both history backends are temporarily down.
+      // continue even when both history backends are temporarily unavailable.
     })
     .then(async () => {
       if (pendingPersistence.has(jobId)) {
@@ -235,6 +234,20 @@ async function markInterrupted(job: Job): Promise<Job> {
   return job;
 }
 
+async function loadAllActiveFromDatabase(
+  status: "queued" | "running"
+): Promise<Job[]> {
+  const database = await getHistoryDatabase();
+  const active: Job[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await database.listFull({ status, limit: 200, cursor });
+    active.push(...page.jobs);
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor);
+  return active;
+}
+
 export async function loadPersisted(): Promise<void> {
   if (globalStore.__purrVerifyLoaded) return;
   if (globalStore.__purrVerifyLoadPromise) {
@@ -246,15 +259,15 @@ export async function loadPersisted(): Promise<void> {
     try {
       const db = await getHistoryDatabase();
       await db.migrateLegacyDirectory(jobsDir());
-      const pages = await Promise.all([
+      const [recent, running, queued] = await Promise.all([
         db.listFull({ limit: 200 }),
-        db.listFull({ status: "running", limit: 200 }),
-        db.listFull({ status: "queued", limit: 200 }),
+        loadAllActiveFromDatabase("running"),
+        loadAllActiveFromDatabase("queued"),
       ]);
       const merged = new Map<string, Job>();
-      for (const page of pages) {
-        for (const job of page.jobs) merged.set(job.jobId, job);
-      }
+      for (const job of recent.jobs) merged.set(job.jobId, job);
+      for (const job of running) merged.set(job.jobId, job);
+      for (const job of queued) merged.set(job.jobId, job);
       for (const job of merged.values()) cacheJob(job);
       loadedFromSqlite = true;
     } catch (error) {
@@ -496,7 +509,12 @@ export async function totalDurableJobCount(): Promise<number> {
 }
 
 export async function verificationHistoryStatus(): Promise<
-  HistoryBackendStatus & { pendingWrites: number; lastPersistenceError: string | null }
+  HistoryBackendStatus & {
+    pendingWrites: number;
+    lastPersistenceError: string | null;
+    fallback: "none" | "legacy-json";
+    progressCheckpointMs: number;
+  }
 > {
   let status: HistoryBackendStatus;
   try {
@@ -515,6 +533,8 @@ export async function verificationHistoryStatus(): Promise<
     pendingWrites: pendingPersistence.size + persistenceChains.size,
     lastPersistenceError:
       globalStore.__purrVerifyPersistenceError ?? status.lastError ?? null,
+    fallback: globalStore.__purrVerifyPersistenceFallback ?? "none",
+    progressCheckpointMs: PERSIST_DEBOUNCE_MS,
   };
 }
 
