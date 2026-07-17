@@ -120,15 +120,6 @@ async function runCommand(
   });
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function readSmallFile(filePath: string, maxBytes = 1024 * 1024): Promise<string | null> {
   try {
     const stat = await fs.stat(filePath);
