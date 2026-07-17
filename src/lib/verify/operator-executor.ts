@@ -311,6 +311,33 @@ async function runOperatorJob(jobId: string): Promise<void> {
       });
       runtime.currentChild = null;
 
+      if (runtime.cancelRequested) {
+        let rollbackEvidence: Record<string, unknown> | null = null;
+        if (operation.rollbackOnFailure && snapshotId) {
+          rollbackEvidence = await rollbackAfterFailure(operation, snapshotId);
+          updateJob(jobId, {
+            metadata: {
+              ...job.metadata,
+              _purrOperatorOperation: operation,
+              snapshotId,
+              rollbackEvidence,
+            },
+          });
+        }
+        finishOperatorJob(
+          jobId,
+          timedOut ? "timeout" : "canceled",
+          [
+            timedOut ? "operator job exceeded total timeout" : "operator job canceled",
+            rollbackEvidence ? "automatic rollback attempted" : "",
+          ]
+            .filter(Boolean)
+            .join("; "),
+          stepLabel(step)
+        );
+        return;
+      }
+
       if (!result.ok) {
         let rollbackEvidence: Record<string, unknown> | null = null;
         if (operation.rollbackOnFailure && snapshotId) {
