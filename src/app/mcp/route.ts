@@ -60,6 +60,8 @@ const TOOL_SCOPE: Record<string, string> = {
   purr_inspect_runtime: "verify:read",
   purr_inspect_environment: "verify:read",
   purr_plan_deployment: "verify:read",
+  purr_get_job_status: "verify:read",
+  purr_get_job_logs: "verify:read",
   list_share_links: "verify:read",
   create_verification_job: "verify:run",
   cancel_verification_job: "verify:run",
