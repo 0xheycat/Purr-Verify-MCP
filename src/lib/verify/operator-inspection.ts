@@ -148,7 +148,7 @@ function isInside(root: string, candidate: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function relatedPath(projectRoot: string, candidate: string | null | undefined): boolean {
+export function relatedPath(projectRoot: string, candidate: string | null | undefined): boolean {
   if (!candidate) return false;
   const normalized = path.resolve(candidate);
   return isInside(projectRoot, normalized);
