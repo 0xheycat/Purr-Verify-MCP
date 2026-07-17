@@ -34,6 +34,16 @@ const READ_ONLY = {
   idempotentHint: true,
 } as const;
 
+const DEPLOYMENT_STRATEGIES: DeploymentStrategy[] = [
+  "auto",
+  "in_place",
+  "release_symlink",
+  "pm2",
+  "systemd",
+  "docker_compose",
+  "custom",
+];
+
 const CWD_PROPERTY = {
   type: "string",
   description:
