@@ -377,7 +377,9 @@ async function runOperatorJob(jobId: string): Promise<void> {
     runtime.jobTimer = null;
     runtime.currentChild = null;
     runtime.env = null;
-    await releaseLock?.().catch(() => {});
+    if (releaseLock) {
+      await releaseLock().catch(() => {});
+    }
     await flushJobPersistence(jobId);
   }
 }
