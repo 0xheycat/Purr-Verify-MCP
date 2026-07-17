@@ -20,6 +20,10 @@ import { runnerTools } from "./system-tools";
 import { HISTORY_MCP_TOOLS, handleHistoryMcpTool } from "./history-mcp";
 import { OPERATOR_MCP_TOOLS, handleOperatorMcpTool } from "./operator-mcp";
 import {
+  OPERATOR_MUTATION_MCP_TOOLS,
+  handleOperatorMutationMcpTool,
+} from "./operator-mutation-mcp";
+import {
   createShareToken,
   listShareTokensForJob,
   revokeAllForJob,
@@ -54,6 +58,7 @@ interface ToolDef {
 const TOOLS: ToolDef[] = [
   ...HISTORY_MCP_TOOLS,
   ...OPERATOR_MCP_TOOLS,
+  ...OPERATOR_MUTATION_MCP_TOOLS,
   {
     name: "create_verification_job",
     description:
