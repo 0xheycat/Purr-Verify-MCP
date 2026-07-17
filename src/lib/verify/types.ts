@@ -1,5 +1,9 @@
 // Shared types for the Purr Verify MCP service.
 
+import type { OperatorJobKind, OperatorOperationRecord } from "./operator-operation-types";
+
+export type JobKind = "verification" | OperatorJobKind;
+
 export type JobStatus =
   | "queued"
   | "running"
