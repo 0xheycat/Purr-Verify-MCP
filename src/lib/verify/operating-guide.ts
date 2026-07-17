@@ -3,15 +3,19 @@ export const VERIFY_MCP_INSTRUCTIONS =
 
 export const VERIFY_OPERATING_GUIDE = {
   name: "Purr Verify MCP Operating Guide",
-  version: "2026-07-17-operator-phase1",
+  version: "2026-07-17-operator-phase2",
   serverRole:
-    "Use this MCP for runtime verification plus private read-only VPS project discovery, inspection, environment inventory, and deployment planning. Repository-clone verification still uses isolated workspaces and allowlisted commands. Phase-one operator tools do not deploy, restart, edit repositories, or replace GitHub MCP.",
+    "Use this MCP for repository-clone verification plus private VPS project discovery, inspection, generic local command execution, exact-tree verification, snapshots, deployment, service restart, health checks, and rollback. Operator mutations run as durable asynchronous jobs. GitHub MCP remains responsible for branches, commits, pull requests, and source-file edits.",
   startupProtocol: [
     "Call read_operating_guide first.",
     "Call health_check to confirm runtime, queue, effective timeout policy, durable history status, and auth mode.",
     "For local VPS work, discover projects or provide an absolute cwd, then inspect the project and runtime before planning deployment.",
     "Inspect environment key presence first; reveal only explicitly requested keys when a value is genuinely required.",
     "Call purr_plan_deployment before future deployment mutations. Phase one returns a plan only.",
+    "Use purr_run_command as the generic private escape hatch; argv is preferred and shell execution remains available explicitly.",
+    "Use purr_verify_project to verify the exact local VPS working tree without cloning a disposable workspace.",
+    "Use purr_deploy_project with approved=true for snapshot, activation, install, verify, build, restart, health checks, and optional automatic rollback in one durable asynchronous job.",
+    "Use purr_get_job_status, purr_get_job_logs, and purr_cancel_job for every local operator job.",
     "Call list_allowed_commands before choosing commands.",
     "Confirm repo, ref, expected_head when available, and command list.",
     "Use create_verification_job with mode=auto or mode=async for install/build/lint/typecheck/test.",
@@ -27,7 +31,8 @@ export const VERIFY_OPERATING_GUIDE = {
     "Valid long_run verification is not blocked merely because it lasts for hours. Eight-to-nine-hour smoke, soak, fork, and live-observation jobs are supported up to maxLongRunTimeoutMs when the operator explicitly supplies long_run=true and valid timeout overrides.",
     "Queued and running jobs are never removed by history retention. Their durable state remains readable until they reach a terminal result, including cancellation and cleanup evidence.",
     "History summaries and log chunks protect agent context; they do not remove access to full stored job evidence.",
-    "Phase-one purr operator tools are read-only. They discover, inspect, inventory, and plan without running deploy, restart, rollback, or arbitrary command mutations.",
+    "Private operator commands, local verification, snapshots, deploys, restarts, health checks, and rollbacks run as durable asynchronous jobs against canonical local project paths.",
+    "Same-project operations are serialized by canonical cwd while unrelated projects may execute concurrently within the shared job limit.",
     "Environment inspection returns key names, source locations, and present or missing state by default. Revealing a value requires explicit requested keys and that response is not stored in history or deployment plans.",
     "Canonical cwd is the project identity for plans and future same-project operation locks; requested and symlink paths remain visible for auditability.",
     "Retry transient read-only MCP transport errors, timeouts, HTTP 429, and HTTP 5xx at most five times with backoff of 2, 4, 8, 16, and 32 seconds.",

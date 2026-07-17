@@ -5,6 +5,7 @@ import {
   inspectRuntime,
   planDeployment,
 } from "./operator-inspection";
+import { handleOperatorMutationMcpTool } from "./operator-mutation-mcp";
 import type {
   DeploymentPlanInput,
   DeploymentStrategy,
@@ -293,7 +294,7 @@ export async function handleOperatorMcpTool(
       return { handled: true, payload: await planDeployment(input) };
     }
 
-    return { handled: false };
+    return handleOperatorMutationMcpTool(name, args);
   } catch (error) {
     return errorPayload(error);
   }
