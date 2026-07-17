@@ -14,6 +14,7 @@ import { MAX_LONG_RUN_TIMEOUT_MS, VERSION, getConfig, isConfigured, isRepoAllowe
 import { checkAuth, unauthorized } from "./auth";
 import { validateCommands, listPatterns } from "./allowlist";
 import { enqueueJob, requestCancel, runJobSync } from "./executor";
+import { redactText } from "./redact";
 import { getJob, getJobDurable, listJobs, loadPersisted } from "./store";
 import { activeJobCount, queuedJobCount, totalDurableJobCount, verificationHistoryStatus } from "./store";
 import { runnerTools } from "./system-tools";
