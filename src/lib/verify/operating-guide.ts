@@ -1,14 +1,17 @@
 export const VERIFY_MCP_INSTRUCTIONS =
-  "Before verification work, call read_operating_guide, health_check, and list_allowed_commands. Use mode=auto or async for install/build/lint/typecheck/test. Long-running sync requests are routed to async instead of rejected. Valid long_run jobs, including 8-9 hour smoke and soak verification, are first-class developer workflows up to the operator timeout cap. Read effectiveMode from the response and poll get_verification_job when it is async. Use history summaries and bounded log chunks by default while preserving full evidence access. Retry transient read-only transport failures with bounded backoff. A failed job ends only the current bounded run; never pause a recurring schedule.";
+  "Before verification or local VPS operator work, call read_operating_guide and health_check. Use the purr discovery, inspection, environment, and deployment-plan tools for read-only local project work. Call list_allowed_commands before repository-clone verification. Use mode=auto or async for install/build/lint/typecheck/test. Long-running sync requests are routed to async instead of rejected. Valid long_run jobs, including 8-9 hour smoke and soak verification, are first-class developer workflows up to the operator timeout cap. Read effectiveMode from the response and poll get_verification_job when it is async. Use history summaries and bounded log chunks by default while preserving full evidence access.";
 
 export const VERIFY_OPERATING_GUIDE = {
   name: "Purr Verify MCP Operating Guide",
-  version: "2026-07-16-history",
+  version: "2026-07-17-operator-phase1",
   serverRole:
-    "Use this MCP only for runtime verification. It clones a GitHub repo/ref into an isolated workspace and runs allowlisted commands. It must not edit repositories, create PRs, or replace GitHub MCP.",
+    "Use this MCP for runtime verification plus private read-only VPS project discovery, inspection, environment inventory, and deployment planning. Repository-clone verification still uses isolated workspaces and allowlisted commands. Phase-one operator tools do not deploy, restart, edit repositories, or replace GitHub MCP.",
   startupProtocol: [
     "Call read_operating_guide first.",
     "Call health_check to confirm runtime, queue, effective timeout policy, durable history status, and auth mode.",
+    "For local VPS work, discover projects or provide an absolute cwd, then inspect the project and runtime before planning deployment.",
+    "Inspect environment key presence first; reveal only explicitly requested keys when a value is genuinely required.",
+    "Call purr_plan_deployment before future deployment mutations. Phase one returns a plan only.",
     "Call list_allowed_commands before choosing commands.",
     "Confirm repo, ref, expected_head when available, and command list.",
     "Use create_verification_job with mode=auto or mode=async for install/build/lint/typecheck/test.",
