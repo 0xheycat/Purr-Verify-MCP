@@ -53,6 +53,7 @@ interface ToolDef {
 
 const TOOLS: ToolDef[] = [
   ...HISTORY_MCP_TOOLS,
+  ...OPERATOR_MCP_TOOLS,
   {
     name: "create_verification_job",
     description:
