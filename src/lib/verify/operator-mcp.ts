@@ -6,7 +6,6 @@ import {
   planDeployment,
 } from "./operator-inspection";
 import { handleOperatorMutationMcpTool } from "./operator-mutation-mcp";
-import { sanitizeGitRemote } from "./operator-sanitize";
 import type {
   DeploymentPlanInput,
   DeploymentStrategy,

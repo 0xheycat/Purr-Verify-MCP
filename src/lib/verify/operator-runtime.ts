@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { getConfig } from "./config";
-import { isEnvironmentTemplateFile } from "./operator-sanitize";
 import { redactText } from "./redact";
 import {
   canonicalDirectory,
