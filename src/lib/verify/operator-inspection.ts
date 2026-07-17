@@ -196,6 +196,7 @@ function detectPackageManagerFromNames(
   if (declaration.startsWith("pnpm@")) return "pnpm";
   if (declaration.startsWith("yarn@")) return "yarn";
   if (declaration.startsWith("npm@")) return "npm";
+  if (names.has("package.json")) return "npm";
   return "unknown";
 }
 
