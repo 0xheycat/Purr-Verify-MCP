@@ -14,7 +14,6 @@ import {
 import type {
   DeploymentSnapshot,
   DeploymentSnapshotFile,
-  DirtyStrategy,
   OperatorCommandStep,
   OperatorGitDeployStep,
   OperatorHealthCheck,
