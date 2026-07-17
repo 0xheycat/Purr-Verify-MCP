@@ -36,6 +36,15 @@ const CWD = {
 };
 const ASYNC_NOTE =
   "Returns a durable asynchronous job immediately. Use purr_get_job_status, purr_get_job_logs, or purr_cancel_job.";
+const SERVICE_MANAGERS = new Set<ServiceManager>([
+  "auto",
+  "pm2",
+  "systemd",
+  "docker_compose",
+  "custom",
+]);
+const RESTART_ACTIONS = new Set(["restart", "reload", "up"]);
+const DIRTY_STRATEGIES = new Set<DirtyStrategy>(["reject", "stash", "preserve", "discard"]);
 
 export const OPERATOR_MUTATION_MCP_TOOLS: OperatorMutationToolDefinition[] = [
   {
@@ -69,7 +78,7 @@ export const OPERATOR_MUTATION_MCP_TOOLS: OperatorMutationToolDefinition[] = [
   {
     name: "purr_verify_project",
     description:
-      `Run install, verify, and optional build commands directly against the exact local working tree instead of cloning a disposable workspace. ${ASYNC_NOTE}`,
+      `Run install, verify, and optional build commands against the exact local working tree instead of cloning a disposable workspace. ${ASYNC_NOTE}`,
     inputSchema: {
       type: "object",
       properties: {
@@ -101,7 +110,7 @@ export const OPERATOR_MUTATION_MCP_TOOLS: OperatorMutationToolDefinition[] = [
   {
     name: "purr_deploy_project",
     description:
-      `Deploy an exact local project through snapshot, Git activation, install, verify, build, restart, health checks, and automatic rollback. One approved=true covers the complete planned lifecycle. ${ASYNC_NOTE}`,
+      `Deploy a local project through snapshot, optional Git activation, install, verify, build, restart, health checks, and automatic rollback. One approved=true covers the complete lifecycle. ${ASYNC_NOTE}`,
     inputSchema: {
       type: "object",
       properties: {
@@ -180,6 +189,7 @@ export const OPERATOR_MUTATION_MCP_TOOLS: OperatorMutationToolDefinition[] = [
         cwd: CWD,
         snapshotId: { type: "string" },
         approved: { type: "boolean" },
+        restart: { type: "boolean", default: true },
         manager: {
           type: "string",
           enum: ["auto", "pm2", "systemd", "docker_compose", "custom"],
@@ -189,6 +199,9 @@ export const OPERATOR_MUTATION_MCP_TOOLS: OperatorMutationToolDefinition[] = [
         composeFile: { type: "string" },
         customRestartArgv: { type: "array", items: { type: "string" } },
         healthChecks: { type: "array", items: { type: "object" } },
+        commandTimeoutMs: { type: "number" },
+        jobTimeoutMs: { type: "number" },
+        longRun: { type: "boolean", default: false },
       },
       required: ["cwd", "snapshotId", "approved"],
     },
@@ -248,10 +261,10 @@ function stringArray(value: unknown): string[] | undefined {
 
 function numberArray(value: unknown): number[] | undefined {
   if (!Array.isArray(value)) return undefined;
-  const out = value
+  const values = value
     .filter((entry): entry is number => typeof entry === "number" && Number.isInteger(entry))
     .filter((entry) => entry >= 0 && entry <= 255);
-  return out.length ? Array.from(new Set(out)) : undefined;
+  return values.length ? Array.from(new Set(values)) : undefined;
 }
 
 function error(message: string, extra: Record<string, unknown> = {}): OperatorMutationToolResult {
@@ -262,7 +275,9 @@ function error(message: string, extra: Record<string, unknown> = {}): OperatorMu
   };
 }
 
-function validateEnvironment(value: unknown): { ok: true; env: Record<string, string> } | { ok: false; message: string } {
+function validateEnvironment(
+  value: unknown
+): { ok: true; env: Record<string, string> } | { ok: false; message: string } {
   if (value == null) return { ok: true, env: {} };
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { ok: false, message: "environmentOverrides must be an object of string values" };
@@ -279,10 +294,18 @@ function validateEnvironment(value: unknown): { ok: true; env: Record<string, st
   ]);
   const env: Record<string, string> = {};
   for (const [key, raw] of entries) {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return { ok: false, message: `invalid environment key: ${key}` };
-    if (reserved.has(key.toUpperCase())) return { ok: false, message: `environment key is reserved: ${key}` };
-    if (typeof raw !== "string") return { ok: false, message: `environment value for ${key} must be a string` };
-    if (raw.length > 16_384) return { ok: false, message: `environment value for ${key} is too long` };
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      return { ok: false, message: `invalid environment key: ${key}` };
+    }
+    if (reserved.has(key.toUpperCase())) {
+      return { ok: false, message: `environment key is reserved: ${key}` };
+    }
+    if (typeof raw !== "string") {
+      return { ok: false, message: `environment value for ${key} must be a string` };
+    }
+    if (raw.length > 16_384) {
+      return { ok: false, message: `environment value for ${key} is too long` };
+    }
     env[key] = raw;
   }
   return { ok: true, env };
@@ -292,14 +315,19 @@ function timeoutPolicy(args: Record<string, unknown>, commandCount: number) {
   const cfg = getConfig();
   const longRun = args.longRun === true;
   const commandRequested = Number(args.commandTimeoutMs ?? args.timeoutMs ?? cfg.commandTimeoutMs);
-  const commandTimeoutMs = Number.isFinite(commandRequested) && commandRequested > 0
-    ? Math.floor(commandRequested)
-    : cfg.commandTimeoutMs;
-  const defaultJob = Math.max(cfg.jobTimeoutMs, commandTimeoutMs * Math.max(1, commandCount));
+  const commandTimeoutMs =
+    Number.isFinite(commandRequested) && commandRequested > 0
+      ? Math.floor(commandRequested)
+      : cfg.commandTimeoutMs;
+  const defaultJob = longRun
+    ? Math.min(
+        MAX_LONG_RUN_TIMEOUT_MS,
+        Math.max(cfg.jobTimeoutMs, commandTimeoutMs * Math.max(1, commandCount))
+      )
+    : cfg.jobTimeoutMs;
   const jobRequested = Number(args.jobTimeoutMs ?? defaultJob);
-  const jobTimeoutMs = Number.isFinite(jobRequested) && jobRequested > 0
-    ? Math.floor(jobRequested)
-    : defaultJob;
+  const jobTimeoutMs =
+    Number.isFinite(jobRequested) && jobRequested > 0 ? Math.floor(jobRequested) : defaultJob;
   if (!longRun && (commandTimeoutMs > cfg.jobTimeoutMs || jobTimeoutMs > cfg.jobTimeoutMs)) {
     return { ok: false as const, message: "timeouts above normal JOB_TIMEOUT_MS require longRun=true" };
   }
@@ -322,15 +350,29 @@ function timeoutPolicy(args: Record<string, unknown>, commandCount: number) {
 
 function parseHealthChecks(value: unknown): OperatorHealthCheck[] | null {
   if (!Array.isArray(value)) return null;
-  const allowed = new Set(["http", "tcp", "process", "pm2", "systemd", "docker", "json_rpc", "custom"]);
+  const supported = new Set([
+    "http",
+    "tcp",
+    "process",
+    "pm2",
+    "systemd",
+    "docker",
+    "json_rpc",
+    "custom",
+  ]);
   const checks: OperatorHealthCheck[] = [];
   for (const entry of value) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
     const check = entry as OperatorHealthCheck;
-    if (!allowed.has(String(check.type))) return null;
+    if (!supported.has(String(check.type))) return null;
     checks.push(check);
   }
   return checks;
+}
+
+function validManager(value: unknown): ServiceManager | null {
+  const manager = (valueString(value) ?? "auto") as ServiceManager;
+  return SERVICE_MANAGERS.has(manager) ? manager : null;
 }
 
 function commandSteps(cwd: string, commands: string[], prefix: string): OperatorCommandStep[] {
@@ -344,12 +386,17 @@ function commandSteps(cwd: string, commands: string[], prefix: string): Operator
   }));
 }
 
-function restartInput(args: Record<string, unknown>, cwd: string, action: "restart" | "reload" | "up" = "restart"): OperatorRestartStep {
+function restartInput(
+  args: Record<string, unknown>,
+  cwd: string,
+  manager: ServiceManager,
+  action: "restart" | "reload" | "up" = "restart"
+): OperatorRestartStep {
   return {
     type: "restart",
-    label: `restart service (${valueString(args.serviceName) ?? "auto"})`,
+    label: `restart service (${valueString(args.serviceName) ?? manager})`,
     cwd,
-    manager: (valueString(args.serviceManager ?? args.manager) ?? "auto") as ServiceManager,
+    manager,
     serviceName: valueString(args.serviceName),
     composeFile: valueString(args.composeFile),
     action,
@@ -357,7 +404,10 @@ function restartInput(args: Record<string, unknown>, cwd: string, action: "resta
   };
 }
 
-function queued(job: { jobId: string; status: string; ref: string }, extra: Record<string, unknown> = {}) {
+function queued(
+  job: { jobId: string; status: string; ref: string },
+  extra: Record<string, unknown> = {}
+) {
   return {
     jobId: job.jobId,
     status: job.status,
@@ -380,15 +430,33 @@ export async function handleOperatorMutationMcpTool(
       const job = await getJobDurable(jobId);
       return job
         ? { handled: true, payload: job }
-        : { handled: true, isError: true, payload: { error: "not_found", message: `Job not found: ${jobId}` } };
+        : {
+            handled: true,
+            isError: true,
+            payload: { error: "not_found", message: `Job not found: ${jobId}` },
+          };
     }
+
     if (name === "purr_get_job_logs") {
       const jobId = valueString(args.jobId);
       if (!jobId) return error("jobId is required");
       const job = await getJobDurable(jobId);
-      if (!job) return { handled: true, isError: true, payload: { error: "not_found", message: `Job not found: ${jobId}` } };
-      const index = Number.isInteger(args.commandIndex) ? Number(args.commandIndex) : undefined;
-      const selected = index === undefined ? job.commands : job.commands[index] ? [job.commands[index]] : [];
+      if (!job) {
+        return {
+          handled: true,
+          isError: true,
+          payload: { error: "not_found", message: `Job not found: ${jobId}` },
+        };
+      }
+      const commandIndex = Number.isInteger(args.commandIndex)
+        ? Number(args.commandIndex)
+        : undefined;
+      const selected =
+        commandIndex === undefined
+          ? job.commands
+          : job.commands[commandIndex]
+            ? [job.commands[commandIndex]]
+            : [];
       const offset = Math.max(0, Math.floor(Number(args.offset) || 0));
       const limit = Math.max(1, Math.min(100_000, Math.floor(Number(args.limit) || 20_000)));
       const stream = valueString(args.stream) ?? "both";
@@ -400,7 +468,7 @@ export async function handleOperatorMutationMcpTool(
           offset,
           limit,
           commands: selected.map((command, selectedIndex) => ({
-            commandIndex: index ?? selectedIndex,
+            commandIndex: commandIndex ?? selectedIndex,
             command: command.command,
             status: command.status,
             stdout: stream === "stderr" ? undefined : command.stdout.slice(offset, offset + limit),
@@ -411,14 +479,14 @@ export async function handleOperatorMutationMcpTool(
         },
       };
     }
+
     if (name === "purr_cancel_job") {
       const jobId = valueString(args.jobId);
       if (!jobId) return error("jobId is required");
-      const canceled = requestCancel(jobId);
-      return { handled: true, payload: { jobId, canceled } };
+      return { handled: true, payload: { jobId, canceled: requestCancel(jobId) } };
     }
 
-    const requiresCwd = new Set([
+    const localTools = new Set([
       "purr_run_command",
       "purr_verify_project",
       "purr_create_deploy_snapshot",
@@ -427,7 +495,8 @@ export async function handleOperatorMutationMcpTool(
       "purr_check_health",
       "purr_rollback_deployment",
     ]);
-    if (!requiresCwd.has(name ?? "")) return { handled: false };
+    if (!localTools.has(name ?? "")) return { handled: false };
+
     const requestedCwd = valueString(args.cwd);
     if (!requestedCwd) return error("cwd is required");
     const cwd = (await canonicalDirectory(requestedCwd)).canonicalPath;
@@ -479,9 +548,13 @@ export async function handleOperatorMutationMcpTool(
       const commands = [
         ...(args.install === false ? [] : project.suggestedCommands.install),
         ...(stringArray(args.verifyCommands) ?? project.suggestedCommands.verify),
-        ...(args.build === true ? stringArray(args.buildCommands) ?? project.suggestedCommands.build : []),
+        ...(args.build === true
+          ? stringArray(args.buildCommands) ?? project.suggestedCommands.build
+          : []),
       ];
-      if (!commands.length) return error("no install, verify, or build commands were discovered or supplied");
+      if (!commands.length) {
+        return error("no install, verify, or build commands were discovered or supplied");
+      }
       const policy = timeoutPolicy(args, commands.length);
       if (!policy.ok) return error(policy.message);
       const job = await enqueueOperatorJob({
@@ -495,7 +568,7 @@ export async function handleOperatorMutationMcpTool(
     }
 
     if (name === "purr_create_deploy_snapshot") {
-      const policy = timeoutPolicy({ ...args, longRun: false }, 1);
+      const policy = timeoutPolicy(args, 1);
       if (!policy.ok) return error(policy.message);
       const job = await enqueueOperatorJob({
         kind: "snapshot",
@@ -514,9 +587,18 @@ export async function handleOperatorMutationMcpTool(
     }
 
     if (name === "purr_restart_service") {
-      const restart = restartInput(args, cwd, (valueString(args.action) ?? "restart") as "restart" | "reload" | "up");
+      const manager = validManager(args.manager);
+      if (!manager) return error(`invalid service manager: ${String(args.manager)}`);
+      const action = valueString(args.action) ?? "restart";
+      if (!RESTART_ACTIONS.has(action)) return error(`invalid restart action: ${action}`);
       const policy = timeoutPolicy(args, 1);
       if (!policy.ok) return error(policy.message);
+      const restart = restartInput(
+        args,
+        cwd,
+        manager,
+        action as "restart" | "reload" | "up"
+      );
       const job = await enqueueOperatorJob({
         kind: "restart",
         cwd,
@@ -528,7 +610,9 @@ export async function handleOperatorMutationMcpTool(
 
     if (name === "purr_check_health") {
       const checks = parseHealthChecks(args.checks);
-      if (!checks?.length) return error("checks must contain at least one supported health check");
+      if (!checks?.length) {
+        return error("checks must contain at least one supported health check");
+      }
       const policy = timeoutPolicy(args, checks.length);
       if (!policy.ok) return error(policy.message);
       const job = await enqueueOperatorJob({
@@ -551,8 +635,11 @@ export async function handleOperatorMutationMcpTool(
       const snapshotId = valueString(args.snapshotId);
       if (!snapshotId) return error("snapshotId is required");
       const checks = parseHealthChecks(args.healthChecks) ?? [];
-      const restart = restartInput(args, cwd);
-      const policy = timeoutPolicy({ ...args, longRun: args.longRun === true }, checks.length + 2);
+      const manager = validManager(args.manager);
+      if (!manager) return error(`invalid service manager: ${String(args.manager)}`);
+      const restart =
+        args.restart === false ? undefined : restartInput(args, cwd, manager, "restart");
+      const policy = timeoutPolicy(args, checks.length + (restart ? 2 : 1));
       if (!policy.ok) return error(policy.message);
       const job = await enqueueOperatorJob({
         kind: "rollback",
@@ -575,9 +662,11 @@ export async function handleOperatorMutationMcpTool(
     if (name === "purr_deploy_project") {
       if (args.approved !== true) return error("deployment requires approved=true");
       const dirtyStrategy = (valueString(args.dirtyStrategy) ?? "reject") as DirtyStrategy;
-      if (!new Set(["reject", "stash", "preserve", "discard"]).has(dirtyStrategy)) {
+      if (!DIRTY_STRATEGIES.has(dirtyStrategy)) {
         return error(`invalid dirtyStrategy: ${dirtyStrategy}`);
       }
+      const manager = validManager(args.serviceManager);
+      if (!manager) return error(`invalid service manager: ${String(args.serviceManager)}`);
       const targetRef = valueString(args.targetRef);
       const expectedHead = valueString(args.expectedHead);
       const checks = parseHealthChecks(args.healthChecks) ?? [];
@@ -591,30 +680,35 @@ export async function handleOperatorMutationMcpTool(
         healthChecks: checks as unknown as Array<Record<string, unknown>>,
         allowDirty: dirtyStrategy !== "reject",
       });
-      const installCommands = args.skipInstall === true
-        ? []
-        : stringArray(args.installCommands) ?? plan.commands.install;
+      const installCommands =
+        args.skipInstall === true
+          ? []
+          : stringArray(args.installCommands) ?? plan.commands.install;
       const verifyCommands = stringArray(args.verifyCommands) ?? plan.commands.verify;
       const buildCommands = stringArray(args.buildCommands) ?? plan.commands.build;
-      const manager = (valueString(args.serviceManager) ?? "auto") as ServiceManager;
       const restart = restartInput(
-        { ...args, serviceManager: manager },
+        args,
         cwd,
+        manager,
         manager === "docker_compose" || plan.strategy === "docker_compose" ? "up" : "restart"
       );
+      const hasRestart =
+        manager === "custom"
+          ? Boolean(restart.customArgv?.length)
+          : manager !== "auto" || plan.service.manager !== "none";
       const steps: OperatorStep[] = [
         {
           type: "snapshot",
           label: "capture pre-deploy snapshot",
           cwd,
-          reason: `deploy ${targetRef ?? expectedHead ?? "current target"}`,
+          reason: `deploy ${targetRef ?? expectedHead ?? "current working tree"}`,
           plan: plan as unknown as Record<string, unknown>,
         },
       ];
-      if (plan.project.repository) {
+      if (plan.project.repository && (targetRef || expectedHead)) {
         steps.push({
           type: "git_deploy",
-          label: `activate Git target ${expectedHead ?? targetRef ?? "FETCH_HEAD"}`,
+          label: `activate Git target ${expectedHead ?? targetRef}`,
           cwd,
           targetRef,
           expectedHead,
@@ -624,9 +718,7 @@ export async function handleOperatorMutationMcpTool(
       steps.push(...commandSteps(cwd, installCommands, "install"));
       steps.push(...commandSteps(cwd, verifyCommands, "verify"));
       steps.push(...commandSteps(cwd, buildCommands, "build"));
-      if (manager !== "custom" || restart.customArgv?.length || plan.service.manager !== "none") {
-        steps.push(restart);
-      }
+      if (hasRestart) steps.push(restart);
       steps.push(
         ...checks.map((check, index) => ({
           type: "health" as const,
@@ -637,23 +729,21 @@ export async function handleOperatorMutationMcpTool(
       );
       const policy = timeoutPolicy(args, steps.length);
       if (!policy.ok) return error(policy.message);
+      const rollbackOnFailure = args.rollbackOnFailure !== false;
       const job = await enqueueOperatorJob({
         kind: "deployment",
         cwd,
         env: envResult.env,
         timeoutPolicy: policy.policy,
         steps,
-        rollbackOnFailure: args.rollbackOnFailure !== false,
-        restartAfterRollback: restart,
+        rollbackOnFailure,
+        restartAfterRollback: hasRestart ? restart : undefined,
         healthAfterRollback: checks,
         plan: plan as unknown as Record<string, unknown>,
       });
       return {
         handled: true,
-        payload: queued(job, {
-          plan,
-          rollbackOnFailure: args.rollbackOnFailure !== false,
-        }),
+        payload: queued(job, { plan, rollbackOnFailure, hasRestart }),
       };
     }
 
