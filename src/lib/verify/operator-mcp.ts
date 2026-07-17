@@ -268,11 +268,22 @@ export async function handleOperatorMcpTool(
               !!item && typeof item === "object" && !Array.isArray(item)
           )
         : undefined;
+      const strategyValue = stringValue(args.strategy);
+      if (
+        strategyValue &&
+        !DEPLOYMENT_STRATEGIES.includes(strategyValue as DeploymentStrategy)
+      ) {
+        return {
+          handled: true,
+          isError: true,
+          payload: { error: "validation_failed", message: `invalid strategy: ${strategyValue}` },
+        };
+      }
       const input: DeploymentPlanInput = {
         cwd: cwd!,
         targetRef: stringValue(args.targetRef),
         expectedHead: stringValue(args.expectedHead),
-        strategy: stringValue(args.strategy) as DeploymentStrategy | undefined,
+        strategy: strategyValue as DeploymentStrategy | undefined,
         verifyCommands: stringArray(args.verifyCommands),
         buildCommands: stringArray(args.buildCommands),
         serviceName: stringValue(args.serviceName),
