@@ -63,6 +63,18 @@ export const VERIFY_OPERATING_GUIDE = {
     fullEvidenceAccess: "preserved",
     logAccess: "bounded_chunks_and_search",
   },
+  operatorInspection: {
+    phase: "read_only_discovery_inspection_and_planning",
+    defaultRoots: ["/opt", "/srv", "/var/www", "/home", "/root"],
+    customRootsEnvironment: "PURR_OPERATOR_ROOTS",
+    projectIdentity: "canonical_absolute_cwd",
+    runtimeAdapters: ["pm2", "systemd", "docker_compose", "process"],
+    projectTypes: ["node", "rust", "python", "go", "docker_compose"],
+    environmentSources: ["dotenv", "pm2", "systemd", "docker_compose", "process"],
+    defaultEnvironmentView: "key_name_source_and_presence_only",
+    revealedValuePersistence: "never",
+    mutationToolsAvailable: false,
+  },
   safeToolRouting: {
     verifyMcp: [
       "health_check",
