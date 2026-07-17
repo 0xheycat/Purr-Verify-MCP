@@ -3,7 +3,7 @@ export const VERIFY_MCP_INSTRUCTIONS =
 
 export const VERIFY_OPERATING_GUIDE = {
   name: "Purr Verify MCP Operating Guide",
-  version: "2026-07-17-operator-phase1",
+  version: "2026-07-17-operator-phase2",
   serverRole:
     "Use this MCP for runtime verification plus private read-only VPS project discovery, inspection, environment inventory, and deployment planning. Repository-clone verification still uses isolated workspaces and allowlisted commands. Phase-one operator tools do not deploy, restart, edit repositories, or replace GitHub MCP.",
   startupProtocol: [
