@@ -9,7 +9,6 @@ import {
   listJobs,
   loadPersisted,
   setJobStatus,
-  trimOldJobs,
   updateJob,
 } from "./store";
 import type { CommandResult, Job, JobStatus } from "./types";
@@ -28,8 +27,6 @@ import {
   runHealthCheck,
   runOperatorCommand,
 } from "./operator-runtime";
-
-let operatorSchedulerRunning = false;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -77,9 +74,7 @@ function finishOperatorJob(
   const finishedAt = nowIso();
   const startMs = job.startedAt ? new Date(job.startedAt).getTime() : Date.now();
   for (const command of job.commands) {
-    if (command.status === "pending" || command.status === "running") {
-      command.status = "skipped";
-    }
+    if (command.status === "pending" || command.status === "running") command.status = "skipped";
   }
   updateJob(jobId, {
     status,
@@ -180,7 +175,6 @@ async function executeStep(
 }
 
 async function rollbackAfterFailure(
-  jobId: string,
   operation: OperatorOperationRecord,
   snapshotId: string
 ): Promise<Record<string, unknown>> {
@@ -194,8 +188,7 @@ async function rollbackAfterFailure(
   };
   if (!result.ok) return evidence;
   if (operation.restartAfterRollback) {
-    const restarted = await restartService(operation.restartAfterRollback);
-    evidence.restart = restarted;
+    evidence.restart = await restartService(operation.restartAfterRollback);
   }
   const healthResults: OperatorStepResult[] = [];
   for (const check of operation.healthAfterRollback ?? []) {
@@ -203,6 +196,24 @@ async function rollbackAfterFailure(
   }
   evidence.health = healthResults;
   return evidence;
+}
+
+async function waitForSharedExecutionSlot(job: Job, canceled: () => boolean): Promise<void> {
+  const cfg = getConfig();
+  while (true) {
+    if (canceled()) throw new Error("operator job canceled while waiting for execution slot");
+    const blockers = listJobs(Number.MAX_SAFE_INTEGER).filter((candidate) => {
+      if (candidate.jobId === job.jobId || candidate.status !== "running") return false;
+      const candidateOperation = operatorOperation(candidate);
+      if (!candidateOperation) return true;
+      return (
+        candidate.queuedAt < job.queuedAt ||
+        (candidate.queuedAt === job.queuedAt && candidate.jobId < job.jobId)
+      );
+    });
+    if (blockers.length < cfg.maxConcurrentJobs) return;
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
 }
 
 async function runOperatorJob(jobId: string): Promise<void> {
@@ -217,8 +228,7 @@ async function runOperatorJob(jobId: string): Promise<void> {
     jobTimeoutMs: cfg.jobTimeoutMs,
     maxLongRunTimeoutMs: MAX_LONG_RUN_TIMEOUT_MS,
   };
-  const startedAt = nowIso();
-  updateJob(jobId, { status: "running", startedAt });
+  if (!job.startedAt) updateJob(jobId, { startedAt: nowIso() });
   const runtimeEnv = runtime.env ?? {};
   let timedOut = false;
   let snapshotId = operation.snapshotId;
@@ -236,6 +246,7 @@ async function runOperatorJob(jobId: string): Promise<void> {
   }, timeoutPolicy.jobTimeoutMs);
 
   try {
+    await waitForSharedExecutionSlot(job, () => runtime.cancelRequested === true);
     if (operation.lockProject) {
       releaseLock = await acquireProjectLock(
         operation.cwd,
@@ -255,9 +266,8 @@ async function runOperatorJob(jobId: string): Promise<void> {
         );
         return;
       }
-      const commandStartedAt = nowIso();
       const commandStartMs = Date.now();
-      updateOperatorCommand(jobId, index, { status: "running", startedAt: commandStartedAt });
+      updateOperatorCommand(jobId, index, { status: "running", startedAt: nowIso() });
       let result: OperatorStepResult;
       try {
         result = await executeStep(
@@ -304,7 +314,7 @@ async function runOperatorJob(jobId: string): Promise<void> {
       if (!result.ok) {
         let rollbackEvidence: Record<string, unknown> | null = null;
         if (operation.rollbackOnFailure && snapshotId) {
-          rollbackEvidence = await rollbackAfterFailure(jobId, operation, snapshotId);
+          rollbackEvidence = await rollbackAfterFailure(operation, snapshotId);
           updateJob(jobId, {
             metadata: {
               ...job.metadata,
@@ -317,8 +327,12 @@ async function runOperatorJob(jobId: string): Promise<void> {
         finishOperatorJob(
           jobId,
           result.timedOut || timedOut ? "timeout" : "failed",
-          [result.stderr || result.stdout || `operator step failed: ${stepLabel(step)}`,
-            rollbackEvidence ? "automatic rollback attempted" : ""].filter(Boolean).join("; "),
+          [
+            result.stderr || result.stdout || `operator step failed: ${stepLabel(step)}`,
+            rollbackEvidence ? "automatic rollback attempted" : "",
+          ]
+            .filter(Boolean)
+            .join("; "),
           stepLabel(step)
         );
         return;
@@ -339,39 +353,6 @@ async function runOperatorJob(jobId: string): Promise<void> {
     await releaseLock?.().catch(() => {});
     await flushJobPersistence(jobId);
   }
-}
-
-async function drainOperatorQueue(): Promise<void> {
-  const cfg = getConfig();
-  const all = listJobs(Number.MAX_SAFE_INTEGER);
-  const running = all.filter((job) => job.status === "running").length;
-  const queued = all
-    .filter((job) => job.status === "queued" && isOperatorJob(job))
-    .sort((a, b) =>
-      a.queuedAt === b.queuedAt
-        ? a.jobId.localeCompare(b.jobId)
-        : a.queuedAt.localeCompare(b.queuedAt)
-    );
-  let slots = cfg.maxConcurrentJobs - running;
-  for (const job of queued) {
-    if (slots <= 0) break;
-    slots--;
-    setJobStatus(job.jobId, "running");
-    void runOperatorJob(job.jobId).catch((error) => {
-      finishOperatorJob(job.jobId, "failed", `Unhandled operator error: ${error.message}`);
-    });
-  }
-  trimOldJobs();
-}
-
-export async function ensureOperatorScheduler(): Promise<void> {
-  await loadPersisted();
-  if (operatorSchedulerRunning) return;
-  operatorSchedulerRunning = true;
-  const tick = () => {
-    void drainOperatorQueue().finally(() => setTimeout(tick, 1_000));
-  };
-  tick();
 }
 
 export async function enqueueOperatorJob(input: OperatorEnqueueInput): Promise<Job> {
@@ -408,6 +389,8 @@ export async function enqueueOperatorJob(input: OperatorEnqueueInput): Promise<J
     },
   });
   updateJob(job.jobId, {
+    status: "running",
+    startedAt: nowIso(),
     cleanupStatus: "skipped",
     cleanup: {
       status: "skipped",
@@ -417,7 +400,10 @@ export async function enqueueOperatorJob(input: OperatorEnqueueInput): Promise<J
       cacheRemoved: true,
     },
   });
+  setJobStatus(job.jobId, "running");
   await flushJobPersistence(job.jobId);
-  void ensureOperatorScheduler();
-  return job;
+  void runOperatorJob(job.jobId).catch((error) => {
+    finishOperatorJob(job.jobId, "failed", `Unhandled operator error: ${error.message}`);
+  });
+  return getJob(job.jobId) ?? job;
 }
