@@ -21,9 +21,11 @@ import {
 import type {
   ExecutionRoutingRecord,
   Job,
+  JobKind,
   JobStatus,
   ResolutionProbeModuleRequest,
 } from "./types";
+import type { OperatorOperationRecord } from "./operator-operation-types";
 
 interface RuntimeState {
   currentChild?: ChildProcess | null;
