@@ -5,6 +5,7 @@ import {
   inspectRuntime,
   planDeployment,
 } from "./operator-inspection";
+import { handleOperatorMutationMcpTool } from "./operator-mutation-mcp";
 import type {
   DeploymentPlanInput,
   DeploymentStrategy,
