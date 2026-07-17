@@ -1,14 +1,17 @@
 export const VERIFY_MCP_INSTRUCTIONS =
-  "Before verification work, call read_operating_guide, health_check, and list_allowed_commands. Use mode=auto or async for install/build/lint/typecheck/test. Long-running sync requests are routed to async instead of rejected. Valid long_run jobs, including 8-9 hour smoke and soak verification, are first-class developer workflows up to the operator timeout cap. Read effectiveMode from the response and poll get_verification_job when it is async. Use history summaries and bounded log chunks by default while preserving full evidence access. Retry transient read-only transport failures with bounded backoff. A failed job ends only the current bounded run; never pause a recurring schedule.";
+  "Before verification or local VPS operator work, call read_operating_guide and health_check. Use the purr discovery, inspection, environment, and deployment-plan tools for read-only local project work. Call list_allowed_commands before repository-clone verification. Use mode=auto or async for install/build/lint/typecheck/test. Long-running sync requests are routed to async instead of rejected. Valid long_run jobs, including 8-9 hour smoke and soak verification, are first-class developer workflows up to the operator timeout cap. Read effectiveMode from the response and poll get_verification_job when it is async. Use history summaries and bounded log chunks by default while preserving full evidence access.";
 
 export const VERIFY_OPERATING_GUIDE = {
   name: "Purr Verify MCP Operating Guide",
-  version: "2026-07-16-history",
+  version: "2026-07-17-operator-phase1",
   serverRole:
-    "Use this MCP only for runtime verification. It clones a GitHub repo/ref into an isolated workspace and runs allowlisted commands. It must not edit repositories, create PRs, or replace GitHub MCP.",
+    "Use this MCP for runtime verification plus private read-only VPS project discovery, inspection, environment inventory, and deployment planning. Repository-clone verification still uses isolated workspaces and allowlisted commands. Phase-one operator tools do not deploy, restart, edit repositories, or replace GitHub MCP.",
   startupProtocol: [
     "Call read_operating_guide first.",
     "Call health_check to confirm runtime, queue, effective timeout policy, durable history status, and auth mode.",
+    "For local VPS work, discover projects or provide an absolute cwd, then inspect the project and runtime before planning deployment.",
+    "Inspect environment key presence first; reveal only explicitly requested keys when a value is genuinely required.",
+    "Call purr_plan_deployment before future deployment mutations. Phase one returns a plan only.",
     "Call list_allowed_commands before choosing commands.",
     "Confirm repo, ref, expected_head when available, and command list.",
     "Use create_verification_job with mode=auto or mode=async for install/build/lint/typecheck/test.",
@@ -24,6 +27,9 @@ export const VERIFY_OPERATING_GUIDE = {
     "Valid long_run verification is not blocked merely because it lasts for hours. Eight-to-nine-hour smoke, soak, fork, and live-observation jobs are supported up to maxLongRunTimeoutMs when the operator explicitly supplies long_run=true and valid timeout overrides.",
     "Queued and running jobs are never removed by history retention. Their durable state remains readable until they reach a terminal result, including cancellation and cleanup evidence.",
     "History summaries and log chunks protect agent context; they do not remove access to full stored job evidence.",
+    "Phase-one purr operator tools are read-only. They discover, inspect, inventory, and plan without running deploy, restart, rollback, or arbitrary command mutations.",
+    "Environment inspection returns key names, source locations, and present or missing state by default. Revealing a value requires explicit requested keys and that response is not stored in history or deployment plans.",
+    "Canonical cwd is the project identity for plans and future same-project operation locks; requested and symlink paths remain visible for auditability.",
     "Retry transient read-only MCP transport errors, timeouts, HTTP 429, and HTTP 5xx at most five times with backoff of 2, 4, 8, 16, and 32 seconds.",
     "Do not submit an identical source or test failure repeatedly. Record jobId, command, status, and failure summary; change the source, test, or execution inputs before submitting a new job.",
     "A missing or evicted queued/running job is recorded as VERIFY_RESULT_EVICTED. Continue from fresh state on a later run rather than blindly duplicating the same request.",
@@ -57,6 +63,18 @@ export const VERIFY_OPERATING_GUIDE = {
     fullEvidenceAccess: "preserved",
     logAccess: "bounded_chunks_and_search",
   },
+  operatorInspection: {
+    phase: "read_only_discovery_inspection_and_planning",
+    defaultRoots: ["/opt", "/srv", "/var/www", "/home", "/root"],
+    customRootsEnvironment: "PURR_OPERATOR_ROOTS",
+    projectIdentity: "canonical_absolute_cwd",
+    runtimeAdapters: ["pm2", "systemd", "docker_compose", "process"],
+    projectTypes: ["node", "rust", "python", "go", "docker_compose"],
+    environmentSources: ["dotenv", "pm2", "systemd", "docker_compose", "process"],
+    defaultEnvironmentView: "key_name_source_and_presence_only",
+    revealedValuePersistence: "never",
+    mutationToolsAvailable: false,
+  },
   safeToolRouting: {
     verifyMcp: [
       "health_check",
@@ -69,6 +87,11 @@ export const VERIFY_OPERATING_GUIDE = {
       "compare_verification_jobs",
       "get_job_log_chunk",
       "search_job_logs",
+      "purr_discover_projects",
+      "purr_inspect_project",
+      "purr_inspect_runtime",
+      "purr_inspect_environment",
+      "purr_plan_deployment",
     ],
     githubMcp: ["repository inspection", "branch", "commit", "pull request", "file operations"],
     notion: ["specs", "plans", "audit notes", "project context"],

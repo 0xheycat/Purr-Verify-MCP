@@ -18,6 +18,7 @@ import { getJob, getJobDurable, listJobs, loadPersisted } from "./store";
 import { activeJobCount, queuedJobCount, totalDurableJobCount, verificationHistoryStatus } from "./store";
 import { runnerTools } from "./system-tools";
 import { HISTORY_MCP_TOOLS, handleHistoryMcpTool } from "./history-mcp";
+import { OPERATOR_MCP_TOOLS, handleOperatorMcpTool } from "./operator-mcp";
 import {
   createShareToken,
   listShareTokensForJob,
@@ -52,6 +53,7 @@ interface ToolDef {
 
 const TOOLS: ToolDef[] = [
   ...HISTORY_MCP_TOOLS,
+  ...OPERATOR_MCP_TOOLS,
   {
     name: "create_verification_job",
     description:
@@ -279,6 +281,13 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
           return rpcResult(rid, {
             content: [toText(historyResult.payload)],
             isError: historyResult.isError === true,
+          });
+        }
+        const operatorResult = await handleOperatorMcpTool(name, args);
+        if (operatorResult.handled) {
+          return rpcResult(rid, {
+            content: [toText(operatorResult.payload)],
+            isError: operatorResult.isError === true,
           });
         }
         switch (name) {
