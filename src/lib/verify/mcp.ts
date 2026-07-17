@@ -19,10 +19,7 @@ import { activeJobCount, queuedJobCount, totalDurableJobCount, verificationHisto
 import { runnerTools } from "./system-tools";
 import { HISTORY_MCP_TOOLS, handleHistoryMcpTool } from "./history-mcp";
 import { OPERATOR_MCP_TOOLS, handleOperatorMcpTool } from "./operator-mcp";
-import {
-  OPERATOR_MUTATION_MCP_TOOLS,
-  handleOperatorMutationMcpTool,
-} from "./operator-mutation-mcp";
+import { OPERATOR_MUTATION_MCP_TOOLS } from "./operator-mutation-mcp";
 import {
   createShareToken,
   listShareTokensForJob,
