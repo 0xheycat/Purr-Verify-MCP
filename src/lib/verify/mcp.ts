@@ -283,6 +283,13 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
             isError: historyResult.isError === true,
           });
         }
+        const operatorResult = await handleOperatorMcpTool(name, args);
+        if (operatorResult.handled) {
+          return rpcResult(rid, {
+            content: [toText(operatorResult.payload)],
+            isError: operatorResult.isError === true,
+          });
+        }
         switch (name) {
           case "health_check": {
             await loadPersisted();
