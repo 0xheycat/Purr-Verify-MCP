@@ -18,6 +18,7 @@ import { getJob, getJobDurable, listJobs, loadPersisted } from "./store";
 import { activeJobCount, queuedJobCount, totalDurableJobCount, verificationHistoryStatus } from "./store";
 import { runnerTools } from "./system-tools";
 import { HISTORY_MCP_TOOLS, handleHistoryMcpTool } from "./history-mcp";
+import { OPERATOR_MCP_TOOLS, handleOperatorMcpTool } from "./operator-mcp";
 import {
   createShareToken,
   listShareTokensForJob,
