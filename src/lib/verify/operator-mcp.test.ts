@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { OPERATOR_MCP_TOOLS, handleOperatorMcpTool } from "./operator-mcp";
 
 describe("private developer operator MCP surface", () => {
-  test("exposes the five phase-one tools as additive read-only capabilities", () => {
+  test("exposes alias discovery plus the five phase-one read-only capabilities", () => {
     expect(OPERATOR_MCP_TOOLS.map((tool) => tool.name)).toEqual([
+      "purr_list_server_env_aliases",
       "purr_discover_projects",
       "purr_inspect_project",
       "purr_inspect_runtime",

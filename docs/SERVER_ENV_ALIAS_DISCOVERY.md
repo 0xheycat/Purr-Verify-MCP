@@ -6,9 +6,9 @@ Allowlisted server environment references let clients submit `@server:<alias>` w
 
 Without discovery, the only available probe is to submit a job and infer configuration from a validation failure. That creates unnecessary failed requests and makes credential-safe workflows harder to operate.
 
-## Proposed capability
+## Capability
 
-Add a read-only MCP tool:
+The server exposes a read-only MCP tool:
 
 ```text
 purr_list_server_env_aliases
@@ -20,7 +20,7 @@ The tool returns only:
 - sorted public alias names
 - explicit evidence that values and source environment keys are not included
 
-It must not:
+It does not:
 
 - return source environment key names
 - return resolved values
@@ -40,7 +40,7 @@ It must not:
 }
 ```
 
-## Intended workflow
+## Workflow
 
 1. Operator configures an allowlisted mapping server-side.
 2. Agent calls `purr_list_server_env_aliases`.
@@ -48,7 +48,7 @@ It must not:
 4. Existing server-side resolution injects the value into runtime memory only.
 5. Durable job records, logs, and share links remain free of the backing key and value.
 
-## Acceptance criteria
+## Implemented behavior
 
 - Alias names are normalized and sorted.
 - Malformed allowlist entries remain hidden.

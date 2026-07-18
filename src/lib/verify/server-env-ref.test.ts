@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  listServerEnvAliases,
   parseServerEnvRefAllowlist,
   resolveInlineServerEnvRefs,
 } from "./server-env-ref";
@@ -31,6 +32,31 @@ describe("allowlisted server environment references", () => {
       ["runtime", "PURR_TEST_RUNTIME_VALUE"],
       ["rpc", "SOLANA_RPC_URL"],
     ]);
+  });
+
+  test("discovers normalized sorted aliases without source keys or values", () => {
+    const sourceValue = "resolved-secret-value";
+    const result = listServerEnvAliases(
+      "zeta=PURR_ZETA, malformed, Alpha=PURR_ALPHA, bad alias=PURR_BAD, alpha=PURR_ALPHA_OVERRIDE, beta=PURR_BETA",
+    );
+
+    expect(result).toEqual({
+      configured: true,
+      aliases: ["alpha", "beta", "zeta"],
+      valuesIncluded: false,
+      sourceKeysIncluded: false,
+    });
+    expect(JSON.stringify(result)).not.toContain("PURR_ALPHA_OVERRIDE");
+    expect(JSON.stringify(result)).not.toContain(sourceValue);
+  });
+
+  test("reports an empty configuration while hiding malformed entries", () => {
+    expect(listServerEnvAliases("malformed, bad alias=NOPE, =MISSING_ALIAS")).toEqual({
+      configured: false,
+      aliases: [],
+      valuesIncluded: false,
+      sourceKeysIncluded: false,
+    });
   });
 
   test("keeps plain values and resolves an allowlisted server alias", () => {
