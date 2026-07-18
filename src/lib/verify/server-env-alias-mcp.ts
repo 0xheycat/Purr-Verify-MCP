@@ -1,4 +1,7 @@
-import { listServerEnvAliases } from "./server-env-ref";
+import {
+  listServerEnvAliases,
+  listServerEnvProfiles,
+} from "./server-env-ref";
 
 export interface ServerEnvAliasMcpToolDefinition {
   name: string;
@@ -17,6 +20,12 @@ export interface ServerEnvAliasToolResult {
   isError?: boolean;
 }
 
+const READ_ONLY = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+} as const;
+
 export const SERVER_ENV_ALIAS_MCP_TOOLS: ServerEnvAliasMcpToolDefinition[] = [
   {
     name: "purr_list_server_env_aliases",
@@ -27,17 +36,29 @@ export const SERVER_ENV_ALIAS_MCP_TOOLS: ServerEnvAliasMcpToolDefinition[] = [
       properties: {},
       additionalProperties: false,
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
+    annotations: READ_ONLY,
+  },
+  {
+    name: "purr_list_server_env_profiles",
+    description:
+      "List reusable server-owned environment profile labels for clone verification and private operator jobs. Returns labels and safe configuration diagnostics only; environment keys and values are never included.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
     },
+    annotations: READ_ONLY,
   },
 ];
 
 export function handleServerEnvAliasMcpTool(
   name: string | undefined,
 ): ServerEnvAliasToolResult {
-  if (name !== "purr_list_server_env_aliases") return { handled: false };
-  return { handled: true, payload: listServerEnvAliases() };
+  if (name === "purr_list_server_env_aliases") {
+    return { handled: true, payload: listServerEnvAliases() };
+  }
+  if (name === "purr_list_server_env_profiles") {
+    return { handled: true, payload: listServerEnvProfiles() };
+  }
+  return { handled: false };
 }
