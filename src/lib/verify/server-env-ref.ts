@@ -1,6 +1,16 @@
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ALIAS_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const SERVER_REF_RE = /^@server:([A-Za-z0-9][A-Za-z0-9_.-]{0,63})$/;
+const RESERVED_TARGET_KEYS = new Set([
+  "PATH",
+  "NODE_PATH",
+  "NODE_OPTIONS",
+  "LD_PRELOAD",
+  "LD_LIBRARY_PATH",
+  "DYLD_INSERT_LIBRARIES",
+]);
+
+type EnvironmentSource = Record<string, string | undefined>;
 
 export interface ServerEnvRefResolution {
   ok: boolean;
@@ -43,15 +53,32 @@ export function resolveInlineServerEnvRefs(
   input: Record<string, string>,
   options: {
     allowlistRaw?: string;
-    sourceEnv?: NodeJS.ProcessEnv;
+    sourceEnv?: EnvironmentSource;
   } = {},
 ): ServerEnvRefResolution {
   const allowlist = parseServerEnvRefAllowlist(options.allowlistRaw);
-  const sourceEnv = options.sourceEnv ?? process.env;
+  const sourceEnv: EnvironmentSource = options.sourceEnv ?? process.env;
   const env: Record<string, string> = {};
   const aliases: string[] = [];
 
   for (const [targetKey, inputValue] of Object.entries(input)) {
+    if (!ENV_KEY_RE.test(targetKey)) {
+      return {
+        ok: false,
+        reason: `invalid target environment key: ${targetKey}`,
+        env: {},
+        aliases: [],
+      };
+    }
+    if (RESERVED_TARGET_KEYS.has(targetKey.toUpperCase())) {
+      return {
+        ok: false,
+        reason: `target environment key is reserved: ${targetKey}`,
+        env: {},
+        aliases: [],
+      };
+    }
+
     const reference = SERVER_REF_RE.exec(inputValue);
     if (!reference) {
       if (inputValue.startsWith("@server:")) {
@@ -86,7 +113,7 @@ export function resolveInlineServerEnvRefs(
         aliases: [],
       };
     }
-    if (resolvedValue.length > 16_384) {
+    if (resolvedValue.length > 4_096) {
       return {
         ok: false,
         reason: `server environment alias value is too long: ${alias}`,
