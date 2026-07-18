@@ -1,0 +1,114 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import {
+  parseServerEnvRefAllowlist,
+  resolveInlineServerEnvRefs,
+} from "./server-env-ref";
+import {
+  createJob,
+  deleteJob,
+  getRuntime,
+  setJobStatus,
+} from "./store";
+
+const originalAllowlist = process.env.VERIFY_SERVER_ENV_REF_ALLOWLIST;
+const originalRuntimeValue = process.env.PURR_TEST_RUNTIME_VALUE;
+
+afterEach(() => {
+  if (originalAllowlist === undefined) delete process.env.VERIFY_SERVER_ENV_REF_ALLOWLIST;
+  else process.env.VERIFY_SERVER_ENV_REF_ALLOWLIST = originalAllowlist;
+
+  if (originalRuntimeValue === undefined) delete process.env.PURR_TEST_RUNTIME_VALUE;
+  else process.env.PURR_TEST_RUNTIME_VALUE = originalRuntimeValue;
+});
+
+describe("allowlisted server environment references", () => {
+  test("parses valid alias mappings and ignores malformed entries", () => {
+    const parsed = parseServerEnvRefAllowlist(
+      "runtime=PURR_TEST_RUNTIME_VALUE, malformed, bad alias=OTHER, rpc=SOLANA_RPC_URL",
+    );
+    expect([...parsed.entries()]).toEqual([
+      ["runtime", "PURR_TEST_RUNTIME_VALUE"],
+      ["rpc", "SOLANA_RPC_URL"],
+    ]);
+  });
+
+  test("keeps plain values and resolves an allowlisted server alias", () => {
+    const runtimeValue = "runtime-value-123";
+    const result = resolveInlineServerEnvRefs(
+      {
+        PURR_ENV: "fork",
+        TARGET_RUNTIME_VALUE: "@server:runtime",
+      },
+      {
+        allowlistRaw: "runtime=PURR_TEST_RUNTIME_VALUE",
+        sourceEnv: { PURR_TEST_RUNTIME_VALUE: runtimeValue },
+      },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      env: {
+        PURR_ENV: "fork",
+        TARGET_RUNTIME_VALUE: runtimeValue,
+      },
+      aliases: ["runtime"],
+    });
+    expect(JSON.stringify(result.aliases)).not.toContain(runtimeValue);
+    expect(JSON.stringify(result.aliases)).not.toContain("PURR_TEST_RUNTIME_VALUE");
+  });
+
+  test("fails closed for malformed, unallowlisted, or unavailable aliases", () => {
+    expect(
+      resolveInlineServerEnvRefs(
+        { TARGET_RUNTIME_VALUE: "@server:bad alias" },
+        { allowlistRaw: "runtime=PURR_TEST_RUNTIME_VALUE", sourceEnv: {} },
+      ),
+    ).toMatchObject({
+      ok: false,
+      reason: "invalid server environment reference for TARGET_RUNTIME_VALUE",
+    });
+
+    expect(
+      resolveInlineServerEnvRefs(
+        { TARGET_RUNTIME_VALUE: "@server:unknown" },
+        { allowlistRaw: "runtime=PURR_TEST_RUNTIME_VALUE", sourceEnv: {} },
+      ),
+    ).toMatchObject({
+      ok: false,
+      reason: "server environment alias is not allowlisted: unknown",
+    });
+
+    expect(
+      resolveInlineServerEnvRefs(
+        { TARGET_RUNTIME_VALUE: "@server:runtime" },
+        { allowlistRaw: "runtime=PURR_TEST_RUNTIME_VALUE", sourceEnv: {} },
+      ),
+    ).toMatchObject({
+      ok: false,
+      reason: "server environment alias is unavailable: runtime",
+    });
+  });
+
+  test("createJob keeps resolved values only in runtime state", async () => {
+    process.env.VERIFY_SERVER_ENV_REF_ALLOWLIST = "runtime=PURR_TEST_RUNTIME_VALUE";
+    process.env.PURR_TEST_RUNTIME_VALUE = "runtime-value-456";
+
+    const job = createJob({
+      repo: "owner/repo",
+      ref: "main",
+      commands: ["node --version"],
+      continue_on_error: false,
+      metadata: { purpose: "server env ref test" },
+      env: { TARGET_RUNTIME_VALUE: "@server:runtime" },
+    });
+
+    expect(JSON.stringify(job)).not.toContain("runtime-value-456");
+    expect(JSON.stringify(job)).not.toContain("@server:runtime");
+    expect(getRuntime(job.jobId)?.env).toEqual({
+      TARGET_RUNTIME_VALUE: "runtime-value-456",
+    });
+
+    setJobStatus(job.jobId, "success");
+    expect(await deleteJob(job.jobId)).toBe(true);
+  });
+});
