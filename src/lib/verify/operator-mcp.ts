@@ -6,6 +6,10 @@ import {
   planDeployment,
 } from "./operator-inspection";
 import { handleOperatorMutationMcpTool } from "./operator-mutation-mcp";
+import {
+  SERVER_ENV_ALIAS_MCP_TOOLS,
+  handleServerEnvAliasMcpTool,
+} from "./server-env-alias-mcp";
 import type {
   DeploymentPlanInput,
   DeploymentStrategy,
@@ -52,6 +56,7 @@ const CWD_PROPERTY = {
 };
 
 export const OPERATOR_MCP_TOOLS: OperatorMcpToolDefinition[] = [
+  ...SERVER_ENV_ALIAS_MCP_TOOLS,
   {
     name: "purr_discover_projects",
     description:
@@ -212,6 +217,9 @@ export async function handleOperatorMcpTool(
   args: Record<string, unknown>
 ): Promise<OperatorToolResult> {
   try {
+    const serverEnvAliasResult = handleServerEnvAliasMcpTool(name);
+    if (serverEnvAliasResult.handled) return serverEnvAliasResult;
+
     if (name === "purr_discover_projects") {
       return {
         handled: true,
