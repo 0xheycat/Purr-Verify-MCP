@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { OPERATOR_MCP_TOOLS, handleOperatorMcpTool } from "./operator-mcp";
 
 describe("private developer operator MCP surface", () => {
-  test("exposes alias discovery plus the five phase-one read-only capabilities", () => {
+  test("exposes environment discovery plus the five phase-one read-only capabilities", () => {
     expect(OPERATOR_MCP_TOOLS.map((tool) => tool.name)).toEqual([
       "purr_list_server_env_aliases",
+      "purr_list_server_env_profiles",
       "purr_discover_projects",
       "purr_inspect_project",
       "purr_inspect_runtime",
@@ -16,8 +17,8 @@ describe("private developer operator MCP surface", () => {
         (tool) =>
           tool.annotations.readOnlyHint === true &&
           tool.annotations.destructiveHint === false &&
-          tool.annotations.idempotentHint === true
-      )
+          tool.annotations.idempotentHint === true,
+      ),
     ).toBe(true);
   });
 
