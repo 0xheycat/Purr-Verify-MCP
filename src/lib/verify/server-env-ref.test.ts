@@ -6,6 +6,7 @@ import {
 import {
   createJob,
   deleteJob,
+  flushJobPersistence,
   getRuntime,
   setJobStatus,
 } from "./store";
@@ -57,7 +58,7 @@ describe("allowlisted server environment references", () => {
     expect(JSON.stringify(result.aliases)).not.toContain("PURR_TEST_RUNTIME_VALUE");
   });
 
-  test("fails closed for malformed, unallowlisted, or unavailable aliases", () => {
+  test("fails closed for malformed, unallowlisted, unavailable, or reserved refs", () => {
     expect(
       resolveInlineServerEnvRefs(
         { TARGET_RUNTIME_VALUE: "@server:bad alias" },
@@ -87,6 +88,19 @@ describe("allowlisted server environment references", () => {
       ok: false,
       reason: "server environment alias is unavailable: runtime",
     });
+
+    expect(
+      resolveInlineServerEnvRefs(
+        { PATH: "@server:runtime" },
+        {
+          allowlistRaw: "runtime=PURR_TEST_RUNTIME_VALUE",
+          sourceEnv: { PURR_TEST_RUNTIME_VALUE: "source-value" },
+        },
+      ),
+    ).toMatchObject({
+      ok: false,
+      reason: "target environment key is reserved: PATH",
+    });
   });
 
   test("createJob keeps resolved values only in runtime state", async () => {
@@ -109,6 +123,7 @@ describe("allowlisted server environment references", () => {
     });
 
     setJobStatus(job.jobId, "success");
+    await flushJobPersistence(job.jobId);
     expect(await deleteJob(job.jobId)).toBe(true);
   });
 });
