@@ -1,75 +1,43 @@
 # Purr Verify MCP
 
 <p align="center">
-  <img src="assets/logo.svg" alt="Purr Verify" width="420" />
+  <img src="assets/logo.svg" alt="Purr Verify MCP" width="520" />
 </p>
 
 <p align="center">
-  <strong>Self-hosted verification runner for coding agents, ChatGPT MCP, and CI-like live proof.</strong>
+  <strong>Private verification and operator control plane for coding agents.</strong>
 </p>
 
 <p align="center">
-  <img alt="runtime" src="https://img.shields.io/badge/runtime-Bun-black" />
+  <img alt="runtime" src="https://img.shields.io/badge/runtime-Bun%201.3-black" />
   <img alt="framework" src="https://img.shields.io/badge/framework-Next.js%2016-black" />
   <img alt="language" src="https://img.shields.io/badge/language-TypeScript-3178c6" />
   <img alt="transport" src="https://img.shields.io/badge/transport-MCP%20%2B%20REST-6E56CF" />
-  <img alt="oauth" src="https://img.shields.io/badge/OAuth-ChatGPT%20ready-green" />
+  <img alt="mode" src="https://img.shields.io/badge/mode-private%20operator-0f766e" />
 </p>
 
----
+Purr Verify MCP gives agents a real runtime: fresh GitHub clone verification, exact local working-tree verification, private VPS project inspection, server-owned environment profiles, durable logs, and deployment-oriented operator jobs.
 
-## What this is
-
-Purr Verify MCP gives agents a real runtime.
-
-When an agent can edit code through GitHub MCP but cannot install dependencies, run tests, or build the repo, Purr Verify clones the target branch into an isolated workspace and runs only allowlisted commands. The result is a redacted, auditable verification record exposed through MCP and REST.
-
-```text
-ChatGPT / Codex / Agent
-  ├─ GitHub MCP         read/write repo, commit, PR
-  └─ Purr Verify MCP    clone ref -> install -> test/build -> return logs
-```
-
-This branch also includes a hardened embedded OAuth server for ChatGPT MCP connectors.
+It is built for a private single-owner setup where the tool should remove friction, not create ceremony. Secrets stay server-side, logs stay redacted, and long-running verification is a first-class workflow.
 
 ---
 
-## Status
+## Current Capabilities
 
-```text
-OAuth ChatGPT protocol:        ready
-Authorization Code + PKCE:     ready
-Resource-bound MCP tokens:     ready
-Ed25519 / EdDSA JWT signing:   ready
-JWKS endpoint:                 ready
-Refresh-token rotation:        ready
-Replay family revocation:      ready
-Prisma storage mode:           runtime-tested
-Production build:              green
-```
-
-Verified head for this production OAuth hardening branch:
-
-```text
-1c5d9383ca87468c8206a075f4bb81d3dc4ebbb0
-```
-
----
-
-## Table of contents
-
-- [Architecture](#architecture)
-- [Quickstart](#quickstart)
-- [ChatGPT OAuth setup](#chatgpt-oauth-setup)
-- [Production environment](#production-environment)
-- [Storage modes](#storage-modes)
-- [Auth modes](#auth-modes)
-- [MCP tools](#mcp-tools)
-- [REST API](#rest-api)
-- [Allowed commands](#allowed-commands)
-- [Security model](#security-model)
-- [Deployment notes](#deployment-notes)
-- [Troubleshooting](#troubleshooting)
+- ChatGPT-compatible MCP endpoint at `/mcp`.
+- OAuth metadata and resource-bound access tokens for connector use.
+- REST API for health, job creation, job status, streaming, sharing, and cancellation.
+- Fresh repository verification from `https://github.com/<owner>/<repo>.git`.
+- Exact local project inspection and verification on the VPS.
+- Project discovery across common private VPS roots.
+- Runtime inspection for PM2, systemd, Docker Compose, and matching processes.
+- Environment inventory from dotenv, PM2, systemd, Compose, and process env.
+- Server-side environment aliases with `@server:<alias>`.
+- Server-owned environment profiles selected by public label.
+- Durable job history with SQLite WAL.
+- Async routing for heavy work and long-running fork/soak/smoke verification.
+- Private-friendly timeout defaults with configurable caps.
+- Redacted logs, redacted job records, and temporary share links.
 
 ---
 
@@ -77,25 +45,22 @@ Verified head for this production OAuth hardening branch:
 
 ```mermaid
 flowchart LR
-  Client[ChatGPT / Agent] --> MCP[/POST /mcp/]
-  Client --> REST[/REST API/]
-  MCP --> Auth[Bearer auth / OAuth JWT]
+  Agent[ChatGPT / Codex / Agent] --> MCP[POST /mcp]
+  Agent --> REST[REST API]
+  MCP --> Auth[Server token or OAuth JWT]
   REST --> Auth
-  Auth --> Queue[Verification queue]
-  Queue --> Clone[Fresh GitHub clone]
-  Clone --> Runner[Allowlisted command runner]
-  Runner --> Logs[Redacted logs + job record]
-  OAuth[Embedded OAuth server] --> Auth
-  OAuth --> State[JSON or Prisma OAuth state]
+  Auth --> Router[Execution router]
+  Router --> Clone[Fresh GitHub clone]
+  Router --> Local[Local VPS project]
+  Clone --> Runner[Command runner]
+  Local --> Operator[Operator jobs]
+  Runner --> History[Redacted durable history]
+  Operator --> History
+  Profiles[Server env aliases and profiles] --> Runner
+  Profiles --> Operator
 ```
 
-Runtime rules:
-
-- No arbitrary shell execution.
-- Commands are parsed and spawned with `shell: false`.
-- Every job gets a clean workspace outside the app bundle.
-- Job env values are redacted and never persisted.
-- OAuth refresh credentials are stored only as SHA-256 hashes.
+Core principle: the client sends intent and safe public selectors; the server owns credentials, runtime paths, timeout policy, and durable evidence.
 
 ---
 
@@ -109,7 +74,7 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-Health check:
+Health:
 
 ```bash
 curl http://localhost:3000/api/health
@@ -121,7 +86,7 @@ MCP endpoint:
 http://localhost:3000/mcp
 ```
 
-Production endpoint shape:
+Production endpoint:
 
 ```text
 https://verify.yourdomain.com/mcp
@@ -129,222 +94,220 @@ https://verify.yourdomain.com/mcp
 
 ---
 
-## ChatGPT OAuth setup
+## Production Environment
 
-ChatGPT should discover OAuth through these metadata routes:
-
-```text
-/.well-known/oauth-authorization-server
-/.well-known/oauth-protected-resource
-/.well-known/oauth-protected-resource/mcp
-/.well-known/openid-configuration
-```
-
-OAuth endpoints:
-
-```text
-/oauth/authorize
-/oauth/exchange
-/oauth/register
-/oauth/keys
-/oauth/revoke
-```
-
-Supported OAuth behavior:
-
-```text
-Authorization Code + PKCE S256
-Dynamic Client Registration
-RFC 8707 resource binding
-Ed25519 / EdDSA signed access tokens
-Public JWKS with kid
-Opaque refresh credentials
-Refresh rotation on every use
-Replay detection with family revocation
-Scope narrowing on refresh
-Token revocation endpoint
-```
-
-ChatGPT connector target:
-
-```text
-https://verify.yourdomain.com/mcp
-```
-
-The OAuth approval page is owner-gated with `OAUTH_OWNER_CODE`. Keep that value private.
-
----
-
-## Production environment
-
-Copy `.env.example` to `.env`, then set the values below. Secret values are intentionally left blank in this README so scanners do not mistake documentation for committed secrets.
-
-### Minimum production env
+Minimum single-owner production shape:
 
 ```bash
 NODE_ENV=production
-
 PUBLIC_BASE_URL=https://verify.yourdomain.com
-OAUTH_ISSUER=https://verify.yourdomain.com
-OAUTH_RESOURCE_URL=https://verify.yourdomain.com/mcp
 
+AUTH_MODE=server_token
 VERIFY_TOKEN=
 GITHUB_TOKEN=
-AUTH_MODE=server_token
-ALLOWED_REPOS=0xheycat/Purr-Verify-MCP
+ALLOW_ALL_REPOS=true
 
+OAUTH_ISSUER=https://verify.yourdomain.com
+OAUTH_RESOURCE_URL=https://verify.yourdomain.com/mcp
 OAUTH_OWNER_CODE=
 OAUTH_PRIVATE_KEY=
 OAUTH_ACTIVE_KEY_ID=prod-ed25519-2026-07
 OAUTH_CLIENT_ID=chatgpt-purr-verify
 OAUTH_SCOPES_SUPPORTED=verify:read verify:run verify:share
-OAUTH_TOKEN_TTL_SECONDS=900
+OAUTH_TOKEN_TTL_SECONDS=6048000
 OAUTH_REFRESH_TOKEN_TTL_SECONDS=2592000
 OAUTH_SUBJECT=0xheycat
-
 OAUTH_STORAGE_MODE=json
+
 VERIFY_DATA_DIR=/var/lib/purr-verify/data
 WORKDIR_BASE=/var/lib/purr-verify/workspaces
+TOOLCHAIN_CACHE_DIR=/var/lib/purr-verify/toolchains
 
 MAX_CONCURRENT_JOBS=1
 COMMAND_TIMEOUT_MS=600000
 JOB_TIMEOUT_MS=1800000
-CLEANUP_AFTER_MS=3600000
+MAX_LONG_RUN_TIMEOUT_MS=31536000000
 MAX_LOG_BYTES=500000
+CLEANUP_AFTER_MS=3600000
 ```
 
-### Optional OAuth env
+Private operator defaults are intentionally broad. You can still narrow them with env if you want stricter behavior later.
+
+---
+
+## Server Environment Aliases
+
+Use aliases when a job needs a secret or private runtime value but the client should not send the value.
 
 ```bash
-OAUTH_PUBLIC_KEY=
-OAUTH_ALLOWED_REDIRECT_URIS=https://chatgpt.com/connector/oauth/callback
-OAUTH_VERIFICATION_PUBLIC_KEYS=
+VERIFY_SERVER_ENV_REF_ALLOWLIST=runtime_api_key=VERIFY_RUNTIME_API_KEY,runtime_rpc_url=VERIFY_RUNTIME_RPC_URL
+VERIFY_RUNTIME_API_KEY=
+VERIFY_RUNTIME_RPC_URL=
 ```
 
-`OAUTH_ALLOWED_REDIRECT_URIS` is recommended once the exact ChatGPT callback URI is known. During first live handshake, leaving it empty lets the predefined ChatGPT client accept callbacks under:
+Client request:
+
+```json
+{
+  "env": {
+    "RUNTIME_API_KEY": "@server:runtime_api_key"
+  }
+}
+```
+
+The resolved value exists only in runtime memory. Alias source keys and resolved values are not returned by discovery, job records, logs, snapshots, or share links.
+
+---
+
+## Server Environment Profiles
+
+Profiles group runtime configuration behind one public label. This is the preferred workflow for repeatable private verification.
+
+```bash
+VERIFY_SERVER_ENV_PROFILES='{
+  "shared_node_ci": {
+    "NODE_ENV": "test",
+    "CI": "true"
+  },
+  "purrliquid_fork_smoke": {
+    "PURR_ENV": "fork",
+    "PURR_LLM_ENABLED": "true",
+    "PURR_LLM_PROVIDER": "custom",
+    "PURR_RUNTIME_API_KEY": "@server:runtime_api_key",
+    "SOLANA_FORK_RPC": "@server:runtime_rpc_url"
+  }
+}'
+```
+
+Client request:
+
+```json
+{
+  "env": {
+    "VERIFY_SERVER_ENV_PROFILE": "shared_node_ci"
+  }
+}
+```
+
+The profile selector is consumed before execution and does not reach the child process. Explicit env values can be supplied beside a profile as long as they do not conflict with profile-owned keys.
+
+Discovery tool:
 
 ```text
-https://chatgpt.com/connector/oauth/
+purr_list_server_env_profiles
 ```
 
-Do not enable this in production:
-
-```bash
-OAUTH_ALLOW_EPHEMERAL_KEYS=true
-```
-
-That flag is only for local tests. Production must use a stable `OAUTH_PRIVATE_KEY`, otherwise existing tokens become invalid after restart.
-
-### Generate an Ed25519 OAuth keypair
-
-```bash
-openssl genpkey -algorithm ED25519 -out oauth-ed25519-private.pem
-openssl pkey -in oauth-ed25519-private.pem -pubout -out oauth-ed25519-public.pem
-```
-
-Paste the private PEM into `OAUTH_PRIVATE_KEY`. In hosted env UIs, use escaped newlines if multiline values are not supported.
+It returns only profile labels and safe diagnostics. Environment keys and values are omitted.
 
 ---
 
-## Storage modes
+## MCP Tools
 
-### JSON mode
+High-level groups:
 
-Good for one active instance.
-
-```bash
-OAUTH_STORAGE_MODE=json
-VERIFY_DATA_DIR=/var/lib/purr-verify/data
-```
-
-OAuth state is stored under:
-
-```text
-VERIFY_DATA_DIR/oauth/state.json
-```
-
-Use a persistent volume. Do not run multiple active app instances against the same local JSON file.
-
-### Prisma mode
-
-Good for transactional OAuth state.
-
-```bash
-OAUTH_STORAGE_MODE=prisma
-DATABASE_URL=file:/var/lib/purr-verify/data/purr-verify.db
-```
-
-Prisma mode has runtime tests for:
-
-- authorization-code consumption
-- refresh credential rotation
-- replay-family revocation
-- simultaneous refresh race handling
-- explicit revocation
-
-Current schema provider is SQLite. For true horizontal multi-instance production, migrate the Prisma datasource to Postgres and use a shared transactional database.
+| Group | Tools |
+|---|---|
+| Operating guide | `read_operating_guide`, `health_check`, `list_allowed_commands` |
+| Repository verification | `create_verification_job`, `get_verification_job`, `list_verification_jobs`, `cancel_verification_job` |
+| History and logs | `search_verification_history`, `get_latest_verification`, `get_verification_summary`, `compare_verification_jobs`, `get_job_log_chunk`, `search_job_logs` |
+| Sharing | `create_share_link`, `list_share_links`, `revoke_share_links` |
+| Private project inspection | `purr_discover_projects`, `purr_inspect_project`, `purr_inspect_runtime`, `purr_inspect_environment`, `purr_plan_deployment` |
+| Private operator jobs | `purr_run_command`, `purr_verify_project`, `purr_create_deploy_snapshot`, `purr_deploy_project`, `purr_restart_service`, `purr_check_health`, `purr_rollback_deployment`, `purr_get_job_status`, `purr_get_job_logs`, `purr_cancel_job` |
+| Server env discovery | `purr_list_server_env_aliases`, `purr_list_server_env_profiles` |
 
 ---
 
-## Auth modes
-
-### `server_token`
-
-Client uses the service token. Server uses `GITHUB_TOKEN` for private repo clone.
-
-```bash
-AUTH_MODE=server_token
-VERIFY_TOKEN=
-GITHUB_TOKEN=
-```
-
-### `github_passthrough`
-
-Client bearer value is a GitHub credential. The server validates it against GitHub and uses it only in memory for clone.
-
-```bash
-AUTH_MODE=github_passthrough
-ALLOWED_REPOS=*
-ALLOW_ALL_REPOS=true
-```
-
-For ChatGPT OAuth, `server_token` is usually easier: ChatGPT receives an OAuth access token from this server, while the server clones private repos with its own `GITHUB_TOKEN`.
-
----
-
-## MCP tools
-
-| Tool | Purpose | Scope |
-|---|---|---|
-| `create_verification_job` | Clone repo/ref and run allowlisted commands | `verify:run` |
-| `get_verification_job` | Read one job result | `verify:read` |
-| `list_verification_jobs` | List recent jobs | `verify:read` |
-| `cancel_verification_job` | Cancel queued/running job | `verify:run` |
-| `list_allowed_commands` | Show allowed command grammar | `verify:read` |
-| `health_check` | Health/runtime status | `verify:read` |
-| `create_share_link` | Create temporary public job link | `verify:share` |
-| `list_share_links` | List active share links | `verify:read` |
-| `revoke_share_links` | Revoke share links | `verify:share` |
-| `read_operating_guide` | Agent operating guide | `verify:read` |
-
-Heavy jobs should use async mode and then poll `get_verification_job`.
+## Example: Fresh Clone Verification
 
 ```json
 {
   "repo": "0xheycat/Purr-Verify-MCP",
-  "ref": "fix/production-oauth-hardening",
-  "expected_head": "1c5d938",
+  "ref": "main",
+  "expected_head": "8fd9e81108affba094a0bdadfd86287f97b0372c",
   "mode": "async",
   "commands": [
     "bun install --frozen-lockfile",
-    "bunx prisma generate",
-    "bun test",
+    "bun test --isolate --timeout 20000",
     "bun run typecheck",
     "bun run lint",
     "bun run build"
-  ]
+  ],
+  "env": {
+    "VERIFY_SERVER_ENV_PROFILE": "shared_node_ci"
+  }
 }
 ```
+
+---
+
+## Example: Local VPS Project Verification
+
+```json
+{
+  "cwd": "/root/purr-verify",
+  "verifyCommands": [
+    "bun test --isolate --timeout 20000",
+    "bun run build"
+  ],
+  "environmentOverrides": {
+    "VERIFY_SERVER_ENV_PROFILE": "shared_node_ci"
+  }
+}
+```
+
+For generic local commands, prefer argv:
+
+```json
+{
+  "cwd": "/root/purr-verify",
+  "argv": ["bun", "test", "--isolate", "--timeout", "20000"],
+  "timeoutMs": 7200000
+}
+```
+
+Timeout overrides automatically opt into long-run handling. You do not need to remember a separate flag.
+
+---
+
+## Private Operator Defaults
+
+Current private-friendly defaults:
+
+```text
+MAX_LONG_RUN_TIMEOUT_MS default: 365 days
+VERIFY_ENV_MAX_KEYS default: 500
+VERIFY_ENV_MAX_VALUE_LENGTH default: 65536
+Project discovery depth default/max: 5 / 16
+Project discovery cap default/max: 250 / 2000
+```
+
+Project discovery defaults include:
+
+```text
+/opt /srv /var/www /home /root /mnt /data /var/lib /usr/local /workspace /tmp
+```
+
+You can override discovery roots with:
+
+```bash
+PURR_OPERATOR_ROOTS=/root,/srv,/opt,/data
+```
+
+---
+
+## Security Boundaries
+
+The private mode removes needless friction, not the core safety contract.
+
+Still enforced:
+
+- Secret values are redacted from logs and durable evidence.
+- Git remotes returned by project inspection are sanitized before output.
+- Profile contents, source env keys, and resolved values are not exposed by discovery.
+- Loader-sensitive env keys are reserved: `PATH`, `NODE_PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES`.
+- Destructive command classes require explicit confirmation.
+- Workspaces and job caches are disposable after terminal execution.
+- OAuth refresh credentials are stored as hashes and rotate on use.
 
 ---
 
@@ -354,211 +317,107 @@ Heavy jobs should use async mode and then poll `get_verification_job`.
 curl https://verify.yourdomain.com/api/health
 ```
 
-Create verification job:
+Create a job:
 
 ```bash
 curl -X POST https://verify.yourdomain.com/api/verify \
-  -H "Authorization: Bearer <value>" \
+  -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
     "repo":"0xheycat/Purr-Verify-MCP",
     "ref":"main",
+    "mode":"async",
     "commands":["bun install --frozen-lockfile","bun run build"]
   }'
 ```
 
-Poll job:
+Poll a job:
 
 ```bash
-curl -H "Authorization: Bearer <value>" \
+curl -H "Authorization: Bearer <token>" \
   https://verify.yourdomain.com/api/verify/<jobId>
 ```
 
 ---
 
-## Allowed commands
+## Deployment
 
-Call `list_allowed_commands` for the live list. Current grammar includes:
-
-```text
-bun install
-bun install --frozen-lockfile
-bunx prisma generate
-bunx prisma db push <safe-flags>
-bun run <script>
-bun run <script> <safe-flags>
-bun test
-bun test <path>
-npm ci
-npm run <script>
-pnpm install --frozen-lockfile
-pnpm run <script>
-npx prisma generate
-npx prisma db push <safe-flags>
-node --version
-node <safe-relative-path>
-cat reports/<file>.json
-cat reports/<file>.txt
-```
-
-Rejected everywhere:
+Recommended single-instance deployment:
 
 ```text
-shell metacharacters
-absolute paths
-path traversal
-arbitrary git URLs
-sudo / docker / ssh / scp / rm / chmod / chown / powershell / nc / dd
+Caddy or reverse proxy -> Next standalone app -> SQLite WAL history -> local workspaces
 ```
 
----
-
-## Security model
-
-- OAuth access tokens are resource-bound to `/mcp`.
-- Access tokens are signed with Ed25519/EdDSA and published through JWKS.
-- Refresh credentials are opaque and stored only as SHA-256 hashes.
-- Refresh credentials rotate on every use.
-- Replayed refresh credentials revoke the full family.
-- Authorization codes are single-use and survive restart through the selected storage backend.
-- GitHub credentials are never persisted.
-- Job env values are redacted from logs and share links.
-- Commands run without shell expansion.
-- Workspaces are isolated and cleaned after jobs.
-
----
-
-## Deployment notes
-
-### Single instance
-
-Use this for the current production path:
-
-```text
-1 VPS / 1 container / 1 active app instance
-```
-
-Recommended env:
-
-```bash
-OAUTH_STORAGE_MODE=json
-VERIFY_DATA_DIR=/var/lib/purr-verify/data
-WORKDIR_BASE=/var/lib/purr-verify/workspaces
-MAX_CONCURRENT_JOBS=1
-```
-
-### Multi-instance
-
-Use this only when you run multiple app servers behind a load balancer.
-
-```text
-Load balancer
-  ├─ app instance A
-  ├─ app instance B
-  └─ app instance C
-```
-
-Multi-instance requires shared transactional storage. Do not use local JSON state for this. Move Prisma to Postgres first.
-
----
-
-## Verification checklist
-
-Before calling a deployment production-ready:
+Build and restart flow:
 
 ```bash
 bun install --frozen-lockfile
-bunx prisma generate
-bun test
+bun test --isolate --timeout 20000
 bun run typecheck
 bun run lint
 bun run build
+systemctl restart purr-verify
 ```
 
-For OAuth storage proof:
+Use a persistent data directory:
 
 ```bash
-bun test src/lib/verify/oauth-server.test.ts
-bun test src/lib/verify/oauth-prisma-state.test.ts
-```
-
-Expected behavior:
-
-```text
-OAuth tests pass
-Prisma runtime proof passes
-Typecheck passes
-Lint passes
-Next production build passes
+VERIFY_DATA_DIR=/var/lib/purr-verify/data
+WORKDIR_BASE=/var/lib/purr-verify/workspaces
 ```
 
 ---
 
 ## Troubleshooting
 
-### ChatGPT cannot authorize
+### Tool schema is stale in ChatGPT
 
-Check:
+Deploy latest `main`, restart the service, then refresh the connector schema in ChatGPT. OAuth reconnect is usually not required when scopes are unchanged.
 
-```text
-PUBLIC_BASE_URL
-OAUTH_ISSUER
-OAUTH_RESOURCE_URL
-OAUTH_OWNER_CODE
-OAUTH_PRIVATE_KEY
-OAUTH_ACTIVE_KEY_ID
+### Alias is listed but unavailable
+
+The public alias exists but the backing server env key is missing or empty. Provision the backing key in the service environment, restart the service, then retry.
+
+### Profile list is empty
+
+Set `VERIFY_SERVER_ENV_PROFILES` on the server and restart. The discovery tool intentionally returns labels only, never profile contents.
+
+### Job times out too early
+
+Use explicit timeout overrides. They automatically opt into long-run handling:
+
+```json
+{
+  "command_timeout_ms": 7200000,
+  "job_timeout_ms": 7200000
+}
 ```
 
-Then open:
+### Build fails only in production checkout
 
-```text
-https://verify.yourdomain.com/.well-known/oauth-authorization-server
-https://verify.yourdomain.com/.well-known/oauth-protected-resource/mcp
-https://verify.yourdomain.com/oauth/keys
-```
-
-### Token exchange fails with `invalid_target`
-
-`resource` does not match `OAUTH_RESOURCE_URL`. For ChatGPT MCP this should usually be:
-
-```text
-https://verify.yourdomain.com/mcp
-```
-
-### Tokens become invalid after restart
-
-You are probably using ephemeral keys. Set a stable `OAUTH_PRIVATE_KEY` and `OAUTH_ACTIVE_KEY_ID`.
-
-### Authorization code works once then fails
-
-That is expected. Authorization codes are single-use.
-
-### Refresh token replay revokes access
-
-That is expected. Reusing an already-rotated refresh credential is treated as replay and revokes the full family.
-
-### Build fails only inside the runner
-
-Check `/api/health`. `workspaceRoot` must not be inside `.next`. Use:
+Run the full suite with isolation and a realistic timeout:
 
 ```bash
-WORKDIR_BASE=/var/lib/purr-verify/workspaces
+bun test --isolate --timeout 20000
 ```
+
+Some Prisma-backed tests can be sensitive to production `.env` if run without isolation.
 
 ---
 
-## Project files
+## Project Map
 
 ```text
-src/lib/verify/oauth-server.ts          OAuth endpoints + token exchange
-src/lib/verify/oauth-keys.ts            Ed25519 signing, JWKS, key rotation support
-src/lib/verify/oauth-state.ts           JSON / Prisma OAuth state backend
-src/lib/verify/oauth-metadata.ts        Protected-resource metadata
-src/lib/verify/auth.ts                  Bearer, OAuth JWT, GitHub passthrough auth
-src/lib/verify/mcp.ts                   MCP tools and scope enforcement
-prisma/schema.prisma                    OAuth storage tables
-SPEC.md                                 Product boundary and acceptance criteria
-SKILL.md                                Agent operating guide
+src/lib/verify/mcp.ts                      MCP tool surface and verification jobs
+src/lib/verify/operator-mcp.ts             Private project inspection tools
+src/lib/verify/operator-mutation-mcp.ts    Private operator mutation tools
+src/lib/verify/server-env-ref.ts           Server env aliases and profiles
+src/lib/verify/executor.ts                 Fresh clone verification runner
+src/lib/verify/operator-executor.ts        Local VPS operator job runner
+src/lib/verify/history-db.ts               SQLite WAL durable history
+src/lib/verify/oauth-server.ts             OAuth authorization and token exchange
+src/lib/verify/oauth-state.ts              JSON / Prisma OAuth state backends
+src/lib/verify/operating-guide.ts          Agent-facing operating guide
 ```
 
 ---

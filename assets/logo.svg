@@ -1,34 +1,26 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Purr Verify">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" role="img" aria-label="Purr Verify MCP">
   <defs>
-    <linearGradient id="neon" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#22d3ee"/>
-      <stop offset="0.5" stop-color="#8b5cf6"/>
-      <stop offset="1" stop-color="#d946ef"/>
+    <linearGradient id="mark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#14b8a6"/>
+      <stop offset="0.55" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#7c3aed"/>
     </linearGradient>
-    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
-      <feGaussianBlur stdDeviation="6" result="b"/>
-      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#0f172a" flood-opacity="0.16"/>
     </filter>
   </defs>
-  <rect width="1024" height="1024" fill="#0a0e1a"/>
-  <g stroke="#1e2a44" stroke-width="2" fill="none" opacity="0.6">
-    <path d="M0 200 H180 V320"/>
-    <path d="M1024 200 H844 V320"/>
-    <path d="M0 824 H180 V704"/>
-    <path d="M1024 824 H844 V704"/>
-    <circle cx="180" cy="320" r="6" fill="#1e2a44" stroke="none"/>
-    <circle cx="844" cy="320" r="6" fill="#1e2a44" stroke="none"/>
-    <circle cx="180" cy="704" r="6" fill="#1e2a44" stroke="none"/>
-    <circle cx="844" cy="704" r="6" fill="#1e2a44" stroke="none"/>
+  <rect width="1200" height="320" rx="44" fill="#f8fafc"/>
+  <g filter="url(#soft)">
+    <rect x="64" y="54" width="212" height="212" rx="52" fill="#0f172a"/>
+    <path d="M170 88l72 28v50c0 54-30 89-72 111-42-22-72-57-72-111v-50l72-28z" fill="url(#mark)"/>
+    <path d="M132 166l27 27 55-62" fill="none" stroke="#fff" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="220" cy="214" r="10" fill="#fff" opacity="0.9"/>
+    <circle cx="244" cy="214" r="10" fill="#fff" opacity="0.7"/>
   </g>
-  <g fill="none" stroke="url(#neon)" stroke-width="14" stroke-linejoin="round" stroke-linecap="round" filter="url(#glow)">
-    <path d="M336 360 L300 250 L410 322 M688 360 L724 250 L614 322"/>
-    <path d="M336 360 Q512 300 688 360 Q740 520 660 640 Q512 760 364 640 Q284 520 336 360 Z"/>
-    <path d="M410 470 q34 -34 68 0"/>
-    <path d="M546 470 q34 -34 68 0"/>
-    <path d="M496 540 l16 20 l16 -20"/>
-    <path d="M330 520 H250 M330 560 H260 M694 520 H774 M694 560 H764"/>
-    <path d="M470 392 l28 30 l64 -74"/>
+  <text x="326" y="145" fill="#0f172a" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="76" font-weight="800" letter-spacing="-2">Purr Verify</text>
+  <text x="329" y="207" fill="#475569" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="34" font-weight="500">Private MCP verification and operator runtime</text>
+  <g transform="translate(988 78)">
+    <rect width="132" height="58" rx="29" fill="#e2e8f0"/>
+    <text x="66" y="38" text-anchor="middle" fill="#0f172a" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="25" font-weight="800" letter-spacing="1.5">MCP</text>
   </g>
-  <text x="512" y="880" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="120" font-weight="700" letter-spacing="8" fill="url(#neon)" filter="url(#glow)">PURR VERIFY</text>
 </svg>

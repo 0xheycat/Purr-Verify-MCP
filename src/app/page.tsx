@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Cat, Github, ShieldAlert, BookOpen } from "lucide-react";
+import { Github, ShieldAlert, BookOpen, ShieldCheck } from "lucide-react";
 import { JobStats } from "@/components/verify/JobStats";
 import { JobTimeline } from "@/components/verify/JobTimeline";
 import { DurationTrends } from "@/components/verify/DurationTrends";
@@ -185,17 +185,17 @@ function DashboardInner() {
       <header className="sticky top-0 z-30 glass backdrop-blur-xl bg-background/70 border-b border-border/50 shadow-[0_1px_20px_-4px_rgba(0,0,0,0.08)]">
         <div className="relative mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3">
           {/* Decorative gradient orb behind header */}
-          <div className="pointer-events-none absolute -top-20 left-1/2 -translate-x-1/2 h-40 w-[500px] rounded-full bg-gradient-to-br from-amber-500/10 via-orange-500/5 to-transparent blur-3xl animate-orb-drift" />
+          <div className="pointer-events-none absolute -top-20 left-1/2 -translate-x-1/2 h-40 w-[500px] rounded-full bg-gradient-to-br from-teal-500/10 via-blue-500/5 to-transparent blur-3xl animate-orb-drift" />
           <div className="flex items-center gap-2.5">
-            <div className="logo-icon-hover flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 text-white shadow-sm">
-              <Cat className="h-5 w-5" />
+            <div className="logo-icon-hover flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-teal-500 via-blue-600 to-violet-600 text-white shadow-sm">
+              <ShieldCheck className="h-5 w-5" />
             </div>
             <div>
               <h1 className="text-base font-bold leading-tight tracking-tight">
-                Purr Verify <span className="text-amber-600">MCP</span>
+                Purr Verify <span className="text-teal-600 dark:text-teal-400">MCP</span>
               </h1>
               <p className="text-[11px] leading-tight text-muted-foreground">
-                Private verification runner for GitHub branches
+                Private verification and operator runtime
               </p>
             </div>
           </div>
@@ -473,17 +473,17 @@ curl -X POST http://localhost:3000/mcp \\
       </main>
 
       {/* Footer */}
-      <footer className="mt-auto bg-background/80 backdrop-blur transition-colors hover:bg-amber-500/5">
+      <footer className="mt-auto bg-background/80 backdrop-blur transition-colors hover:bg-teal-500/5">
         <div
-          className="h-[1.5px] bg-gradient-to-r from-transparent via-amber-500/30 to-transparent animate-gradient-line"
+          className="h-[1.5px] bg-gradient-to-r from-transparent via-teal-500/30 to-transparent animate-gradient-line"
           style={{ boxShadow: "0 -1px 12px -2px rgba(245,158,11,0.1)" }}
         />
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground">
           <div className="flex items-center gap-1.5">
-            <Cat className="h-3.5 w-3.5 text-amber-500 footer-cat-hover" />
+            <ShieldCheck className="h-3.5 w-3.5 text-teal-500" />
             <span>Purr Verify MCP · allowlisted verification runner</span>
             {health?.version && (
-              <span className="rounded-full bg-amber-500/10 px-1.5 py-0 text-[10px] font-mono text-amber-700 dark:text-amber-300">
+              <span className="rounded-full bg-teal-500/10 px-1.5 py-0 text-[10px] font-mono text-teal-700 dark:text-teal-300">
                 v{health.version}
               </span>
             )}

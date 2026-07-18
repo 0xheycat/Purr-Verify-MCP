@@ -1,5 +1,5 @@
 export const VERIFY_MCP_INSTRUCTIONS =
-  "Before verification or local VPS operator work, call read_operating_guide and health_check. Use the purr discovery, inspection, environment, and deployment-plan tools for read-only local project work. Call list_allowed_commands before repository-clone verification. Use mode=auto or async for install/build/lint/typecheck/test. Long-running sync requests are routed to async instead of rejected. Valid long_run jobs, including 8-9 hour smoke and soak verification, are first-class developer workflows up to the operator timeout cap. Read effectiveMode from the response and poll get_verification_job when it is async. Use history summaries and bounded log chunks by default while preserving full evidence access.";
+  "Before verification or local VPS operator work, call read_operating_guide and health_check. Use the purr discovery, inspection, environment, and deployment-plan tools for read-only local project work. Use server-owned aliases and profiles when runtime values are needed. Call list_allowed_commands before repository-clone verification. Use mode=auto or async for install/build/lint/typecheck/test. Long-running sync requests are routed to async instead of rejected. Timeout overrides automatically opt into long-run handling up to the operator timeout cap. Read effectiveMode from the response and poll get_verification_job when it is async. Use history summaries and bounded log chunks by default while preserving full evidence access.";
 
 export const VERIFY_OPERATING_GUIDE = {
   name: "Purr Verify MCP Operating Guide",
@@ -19,7 +19,7 @@ export const VERIFY_OPERATING_GUIDE = {
     "Call list_allowed_commands before choosing commands.",
     "Confirm repo, ref, expected_head when available, and command list.",
     "Use create_verification_job with mode=auto or mode=async for install/build/lint/typecheck/test.",
-    "For smoke, soak, fork, and live-observation jobs lasting hours, set long_run=true with explicit command_timeout_ms and job_timeout_ms up to maxLongRunTimeoutMs.",
+    "For smoke, soak, fork, and live-observation jobs lasting hours, provide explicit command_timeout_ms and job_timeout_ms when needed; timeout overrides automatically opt into long-run handling up to maxLongRunTimeoutMs.",
     "Read requestedMode, effectiveMode, routingReason, and autoRouted from the create response.",
     "Poll get_verification_job until terminal status when effectiveMode is async.",
     "Use search_verification_history, get_verification_summary, and get_job_log_chunk to inspect durable evidence without flooding agent context.",
@@ -28,7 +28,7 @@ export const VERIFY_OPERATING_GUIDE = {
     "Heavy commands requested in sync mode are routed to async instead of being rejected.",
     "Heavy commands include install, build, lint, typecheck, test, prisma generate, playwright, cypress, vitest, jest, Surfpool start, and CI scripts.",
     "Explicit sync remains available for one short smoke command expected to complete within the transport window.",
-    "Valid long_run verification is not blocked merely because it lasts for hours. Eight-to-nine-hour smoke, soak, fork, and live-observation jobs are supported up to maxLongRunTimeoutMs when the operator explicitly supplies long_run=true and valid timeout overrides.",
+    "Valid long-running verification is not blocked merely because it lasts for hours. Smoke, soak, fork, and live-observation jobs are supported up to maxLongRunTimeoutMs when the operator supplies valid timeout overrides.",
     "Queued and running jobs are never removed by history retention. Their durable state remains readable until they reach a terminal result, including cancellation and cleanup evidence.",
     "History summaries and log chunks protect agent context; they do not remove access to full stored job evidence.",
     "Private operator commands, local verification, snapshots, deploys, restarts, health checks, and rollbacks run as durable asynchronous jobs against canonical local project paths.",
@@ -70,7 +70,7 @@ export const VERIFY_OPERATING_GUIDE = {
   },
   operatorInspection: {
     phase: "read_only_discovery_inspection_and_planning",
-    defaultRoots: ["/opt", "/srv", "/var/www", "/home", "/root"],
+    defaultRoots: ["/opt", "/srv", "/var/www", "/home", "/root", "/mnt", "/data", "/var/lib", "/usr/local", "/workspace", "/tmp"],
     customRootsEnvironment: "PURR_OPERATOR_ROOTS",
     projectIdentity: "canonical_absolute_cwd",
     runtimeAdapters: ["pm2", "systemd", "docker_compose", "process"],
@@ -78,7 +78,7 @@ export const VERIFY_OPERATING_GUIDE = {
     environmentSources: ["dotenv", "pm2", "systemd", "docker_compose", "process"],
     defaultEnvironmentView: "key_name_source_and_presence_only",
     revealedValuePersistence: "never",
-    mutationToolsAvailable: false,
+    mutationToolsAvailable: true,
   },
   safeToolRouting: {
     verifyMcp: [
@@ -92,11 +92,23 @@ export const VERIFY_OPERATING_GUIDE = {
       "compare_verification_jobs",
       "get_job_log_chunk",
       "search_job_logs",
+      "purr_list_server_env_aliases",
+      "purr_list_server_env_profiles",
       "purr_discover_projects",
       "purr_inspect_project",
       "purr_inspect_runtime",
       "purr_inspect_environment",
       "purr_plan_deployment",
+      "purr_run_command",
+      "purr_verify_project",
+      "purr_create_deploy_snapshot",
+      "purr_deploy_project",
+      "purr_restart_service",
+      "purr_check_health",
+      "purr_rollback_deployment",
+      "purr_get_job_status",
+      "purr_get_job_logs",
+      "purr_cancel_job",
     ],
     githubMcp: ["repository inspection", "branch", "commit", "pull request", "file operations"],
     notion: ["specs", "plans", "audit notes", "project context"],
@@ -110,11 +122,12 @@ export const VERIFY_OPERATING_GUIDE = {
     missingJobStatus: "VERIFY_RESULT_EVICTED",
     explicitCommandTimeoutMs: 600000,
     explicitJobTimeoutMs: 1800000,
-    maxLongRunTimeoutMs: 32400000,
+    maxLongRunTimeoutMs: 31536000000,
     supportedLongRunExamples: [
-      "PurrLiquid 8-9 hour live smoke",
+      "PurrLiquid fork smoke",
       "Surfpool fork soak",
       "long-lived integration observation",
+      "private release verification",
     ],
     recurringScheduleAction: "continue",
     pollWhenEffectiveModeAsync: true,
