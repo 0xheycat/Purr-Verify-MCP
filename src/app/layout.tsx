@@ -16,17 +16,17 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Purr Verify MCP — Private Verification Runner",
+  title: "Purr Verify MCP | Private Operator Runtime",
   description:
-    "Clone a GitHub branch fresh, run allowlisted commands (bun install, bun test, bun run build), capture logs, and return status. MCP-style JSON-RPC + REST API for agents.",
+    "Private MCP verification and operator runtime for coding agents. Run fresh clone checks, local VPS verification, server-owned env profiles, durable jobs, and redacted evidence.",
   keywords: [
     "Purr Verify MCP",
     "verification runner",
-    "GitHub Actions alternative",
+    "private operator runtime",
     "MCP",
     "JSON-RPC",
-    "bun test",
-    "CI",
+    "server env profiles",
+    "Bun",
   ],
   authors: [{ name: "Purr Verify MCP" }],
   icons: {
