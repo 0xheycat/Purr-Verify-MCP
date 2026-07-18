@@ -19,6 +19,13 @@ export interface ServerEnvRefResolution {
   aliases: string[];
 }
 
+export interface ServerEnvAliasDiscovery {
+  configured: boolean;
+  aliases: string[];
+  valuesIncluded: false;
+  sourceKeysIncluded: false;
+}
+
 /**
  * Parse an operator-owned allowlist such as:
  *
@@ -41,6 +48,24 @@ export function parseServerEnvRefAllowlist(
     if (ALIAS_RE.test(alias) && ENV_KEY_RE.test(sourceKey)) out.set(alias, sourceKey);
   }
   return out;
+}
+
+/**
+ * Return only the public alias labels from the operator-owned allowlist.
+ * Source environment key names and resolved values are intentionally omitted.
+ */
+export function listServerEnvAliases(
+  raw = process.env.VERIFY_SERVER_ENV_REF_ALLOWLIST ?? "",
+): ServerEnvAliasDiscovery {
+  const aliases = [...parseServerEnvRefAllowlist(raw).keys()].sort((a, b) =>
+    a.localeCompare(b),
+  );
+  return {
+    configured: aliases.length > 0,
+    aliases,
+    valuesIncluded: false,
+    sourceKeysIncluded: false,
+  };
 }
 
 /**
