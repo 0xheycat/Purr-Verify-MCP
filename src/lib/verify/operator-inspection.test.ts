@@ -83,6 +83,21 @@ INVALID LINE
     expect(result.projects[0]?.projectType).toContain("nextjs");
   });
 
+  test("sanitizes credentialed Git origins during project inspection", async () => {
+    const { project } = await fixture();
+    await fs.rm(path.join(project, ".git"), { recursive: true, force: true });
+    await Bun.$`git init`.cwd(project).quiet();
+    await Bun.$`git remote add origin https://developer:github_pat_example@github.com/example/project.git`
+      .cwd(project)
+      .quiet();
+
+    const result = await inspectProject(project);
+
+    expect(result.git.origin).toBe("https://github.com/example/project.git");
+    expect(result.git.origin).not.toContain("developer");
+    expect(result.git.origin).not.toContain("github_pat_example");
+  });
+
   test("inspects package manager, monorepo, scripts, and required env keys", async () => {
     const { project } = await fixture();
     const result = await inspectProject(project);

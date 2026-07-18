@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sanitizeGitRemote } from "./operator-sanitize";
 import type {
   DeploymentPlan,
   DeploymentPlanInput,
@@ -23,7 +24,19 @@ import type {
   SystemdRuntimeService,
 } from "./operator-types";
 
-const DEFAULT_DISCOVERY_ROOTS = ["/opt", "/srv", "/var/www", "/home", "/root"];
+const DEFAULT_DISCOVERY_ROOTS = [
+  "/opt",
+  "/srv",
+  "/var/www",
+  "/home",
+  "/root",
+  "/mnt",
+  "/data",
+  "/var/lib",
+  "/usr/local",
+  "/workspace",
+  "/tmp",
+];
 const PROJECT_MARKERS: ProjectMarker[] = [
   ".git",
   "package.json",
@@ -360,7 +373,7 @@ async function inspectGit(cwd: string): Promise<GitInspection> {
     present: true,
     root: root.stdout.trim() || cwd,
     head: head.ok ? head.stdout.trim() || null : null,
-    origin: origin.ok ? origin.stdout.trim() || null : null,
+    origin: sanitizeGitRemote(origin.ok ? origin.stdout.trim() || null : null),
     ...parsed,
   };
 }
@@ -402,8 +415,8 @@ export async function discoverProjects(input: DiscoverInput = {}): Promise<{
     .map((value) => value.trim())
     .filter(Boolean);
   const requestedRoots = input.roots?.length ? input.roots : configuredRoots.length ? configuredRoots : DEFAULT_DISCOVERY_ROOTS;
-  const maxDepth = clampInteger(input.maxDepth, 3, 0, 8);
-  const maxProjects = clampInteger(input.maxProjects, 100, 1, 500);
+  const maxDepth = clampInteger(input.maxDepth, 5, 0, 16);
+  const maxProjects = clampInteger(input.maxProjects, 250, 1, 2000);
   const includeNested = input.includeNested === true;
   const roots: string[] = [];
   const projects: DiscoveredProject[] = [];

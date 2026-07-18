@@ -68,10 +68,10 @@ export const OPERATOR_MCP_TOOLS: OperatorMcpToolDefinition[] = [
           type: "array",
           items: { type: "string" },
           description:
-            "Optional absolute roots. Defaults to PURR_OPERATOR_ROOTS or /opt,/srv,/var/www,/home,/root.",
+            "Optional absolute roots. Defaults to PURR_OPERATOR_ROOTS or common private VPS project roots including /opt, /srv, /var/www, /home, /root, /mnt, /data, /var/lib, /usr/local, /workspace, and /tmp.",
         },
-        maxDepth: { type: "number", default: 3, description: "Directory depth, 0-8." },
-        maxProjects: { type: "number", default: 100, description: "Result cap, 1-500." },
+        maxDepth: { type: "number", default: 5, description: "Directory depth, 0-16." },
+        maxProjects: { type: "number", default: 250, description: "Result cap, 1-2000." },
         includeNested: {
           type: "boolean",
           default: false,
