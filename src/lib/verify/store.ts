@@ -9,6 +9,7 @@ import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getConfig } from "./config";
+import { resolveInlineServerEnvRefs } from "./server-env-ref";
 import {
   getHistoryDatabase,
   historyBackendStatus,
