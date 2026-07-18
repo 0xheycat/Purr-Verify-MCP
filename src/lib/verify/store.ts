@@ -320,6 +320,10 @@ export function createJob(input: {
   timeoutPolicy?: Job["timeoutPolicy"];
   execution?: ExecutionRoutingRecord;
 }): Job {
+  const resolvedEnv = resolveInlineServerEnvRefs(input.env ?? {});
+  if (!resolvedEnv.ok) {
+    throw new Error(resolvedEnv.reason ?? "server environment reference resolution failed");
+  }
   const now = new Date().toISOString();
   const job: Job = {
     jobId: randomUUID(),
@@ -365,7 +369,7 @@ export function createJob(input: {
     jobTimer: null,
     cancelRequested: false,
     githubToken: input.githubToken ?? null,
-    env: input.env ?? null,
+    env: Object.keys(resolvedEnv.env).length > 0 ? resolvedEnv.env : null,
     resolutionProbePackages: input.resolutionProbePackages ?? [],
     resolutionProbeModules: input.resolutionProbeModules ?? [],
   });
