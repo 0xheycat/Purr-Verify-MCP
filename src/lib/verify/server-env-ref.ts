@@ -265,5 +265,7 @@ export function resolveInlineServerEnvRefs(
     aliases.push(alias);
   }
 
-  return { ok: true, env, aliases, profile: expanded.profile };
+  return expanded.profile
+    ? { ok: true, env, aliases, profile: expanded.profile }
+    : { ok: true, env, aliases };
 }
