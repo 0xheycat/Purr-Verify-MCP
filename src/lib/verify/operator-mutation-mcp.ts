@@ -303,8 +303,10 @@ function validateEnvironment(
     if (typeof raw !== "string") {
       return { ok: false, message: `environment value for ${key} must be a string` };
     }
-    if (raw.length > 16_384) {
-      return { ok: false, message: `environment value for ${key} is too long` };
+    const maxValueLength = Number.parseInt(process.env.VERIFY_ENV_MAX_VALUE_LENGTH ?? "65536", 10);
+    const effectiveMaxValueLength = Number.isFinite(maxValueLength) && maxValueLength > 0 ? maxValueLength : 65_536;
+    if (raw.length > effectiveMaxValueLength) {
+      return { ok: false, message: `environment value for ${key} exceeds configured max` };
     }
     env[key] = raw;
   }
@@ -313,36 +315,33 @@ function validateEnvironment(
 
 function timeoutPolicy(args: Record<string, unknown>, commandCount: number) {
   const cfg = getConfig();
-  const longRun = args.longRun === true;
-  const commandRequested = Number(args.commandTimeoutMs ?? args.timeoutMs ?? cfg.commandTimeoutMs);
+  const requestedLongRun = args.longRun === true;
+  const hasTimeoutOverride = args.commandTimeoutMs !== undefined || args.timeoutMs !== undefined || args.jobTimeoutMs !== undefined;
+  const longRun = requestedLongRun || hasTimeoutOverride;
+  const commandRequested = Number(args.commandTimeoutMs ?? args.timeoutMs ?? (requestedLongRun ? MAX_LONG_RUN_TIMEOUT_MS : cfg.commandTimeoutMs));
   const commandTimeoutMs =
     Number.isFinite(commandRequested) && commandRequested > 0
       ? Math.floor(commandRequested)
       : cfg.commandTimeoutMs;
-  const defaultJob = longRun
+  const defaultJob = requestedLongRun
     ? Math.min(
         MAX_LONG_RUN_TIMEOUT_MS,
         Math.max(cfg.jobTimeoutMs, commandTimeoutMs * Math.max(1, commandCount))
       )
-    : cfg.jobTimeoutMs;
+    : Math.max(cfg.jobTimeoutMs, commandTimeoutMs);
   const jobRequested = Number(args.jobTimeoutMs ?? defaultJob);
   const jobTimeoutMs =
     Number.isFinite(jobRequested) && jobRequested > 0 ? Math.floor(jobRequested) : defaultJob;
-  if (!longRun && (commandTimeoutMs > cfg.jobTimeoutMs || jobTimeoutMs > cfg.jobTimeoutMs)) {
-    return { ok: false as const, message: "timeouts above normal JOB_TIMEOUT_MS require longRun=true" };
-  }
   if (commandTimeoutMs > MAX_LONG_RUN_TIMEOUT_MS || jobTimeoutMs > MAX_LONG_RUN_TIMEOUT_MS) {
     return { ok: false as const, message: `timeout exceeds max ${MAX_LONG_RUN_TIMEOUT_MS} ms` };
   }
-  if (commandTimeoutMs > jobTimeoutMs) {
-    return { ok: false as const, message: "command timeout cannot exceed job timeout" };
-  }
+  const effectiveJobTimeoutMs = Math.max(jobTimeoutMs, commandTimeoutMs);
   return {
     ok: true as const,
     policy: {
       longRun,
       commandTimeoutMs,
-      jobTimeoutMs,
+      jobTimeoutMs: effectiveJobTimeoutMs,
       maxLongRunTimeoutMs: MAX_LONG_RUN_TIMEOUT_MS,
     },
   };

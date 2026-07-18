@@ -2,12 +2,13 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { effectiveDefaultTimeouts } from "./config";
+import { MAX_LONG_RUN_TIMEOUT_MS, effectiveDefaultTimeouts } from "./config";
 import { resolveExecutionMode } from "./execution-policy";
 import {
   decorateMcpResponse,
   routeMcpExecutionBody,
 } from "./mcp-execution-routing";
+import { validateTimeoutPolicy } from "./mcp";
 import { cleanupJobDirectories, runWorkspaceJanitor } from "./workspace-cleanup";
 
 describe("execution routing", () => {
@@ -151,6 +152,27 @@ describe("timeout normalization", () => {
       jobTimeoutMs: 1_800_000,
       normalized: true,
     });
+  });
+  test("accepts explicit timeout overrides without requiring long_run", () => {
+    const result = validateTimeoutPolicy({
+      repo: "owner/repo",
+      ref: "main",
+      commands: ["bun test"],
+      command_timeout_ms: 7_200_000,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      policy: {
+        longRun: true,
+        commandTimeoutMs: 7_200_000,
+        jobTimeoutMs: 7_200_000,
+      },
+    });
+  });
+
+  test("uses a private-friendly long-run max by default", () => {
+    expect(MAX_LONG_RUN_TIMEOUT_MS).toBeGreaterThanOrEqual(365 * 24 * 60 * 60 * 1000);
   });
 });
 

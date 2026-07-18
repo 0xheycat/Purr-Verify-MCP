@@ -567,12 +567,10 @@ export function validateTimeoutPolicy(input: VerifyRequest): {
   policy: Job["timeoutPolicy"];
 } {
   const cfg = getConfig();
-  const longRun = input.long_run === true;
+  const requestedLongRun = input.long_run === true;
   const hasCommandOverride = input.command_timeout_ms !== undefined;
   const hasJobOverride = input.job_timeout_ms !== undefined;
-  if (!longRun && (hasCommandOverride || hasJobOverride)) {
-    return { ok: false, reason: "timeout overrides require long_run=true", policy: undefined };
-  }
+  const longRun = requestedLongRun || hasCommandOverride || hasJobOverride;
   const parse = (name: string, value: unknown, fallback: number): { ok: boolean; value: number; reason?: string } => {
     if (value === undefined) return { ok: true, value: fallback };
     if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || !Number.isInteger(value)) {
@@ -584,19 +582,19 @@ export function validateTimeoutPolicy(input: VerifyRequest): {
     return { ok: true, value };
   };
   const defaultLong = MAX_LONG_RUN_TIMEOUT_MS;
-  const command = parse("command_timeout_ms", input.command_timeout_ms, longRun ? defaultLong : cfg.commandTimeoutMs);
+  const commandFallback = requestedLongRun && !hasCommandOverride ? defaultLong : cfg.commandTimeoutMs;
+  const command = parse("command_timeout_ms", input.command_timeout_ms, commandFallback);
   if (!command.ok) return { ok: false, reason: command.reason, policy: undefined };
-  const job = parse("job_timeout_ms", input.job_timeout_ms, longRun ? defaultLong : cfg.jobTimeoutMs);
+  const jobFallback = requestedLongRun && !hasJobOverride ? defaultLong : cfg.jobTimeoutMs;
+  const job = parse("job_timeout_ms", input.job_timeout_ms, jobFallback);
   if (!job.ok) return { ok: false, reason: job.reason, policy: undefined };
-  if (command.value > job.value) {
-    return { ok: false, reason: "command_timeout_ms cannot exceed job_timeout_ms", policy: undefined };
-  }
+  const jobTimeoutMs = Math.max(job.value, command.value);
   return {
     ok: true,
     policy: {
       longRun,
       commandTimeoutMs: command.value,
-      jobTimeoutMs: job.value,
+      jobTimeoutMs,
       maxLongRunTimeoutMs: MAX_LONG_RUN_TIMEOUT_MS,
     },
   };

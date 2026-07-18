@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 export const VERSION = "1.0.0";
-export const MAX_LONG_RUN_TIMEOUT_MS = 9 * 60 * 60 * 1000;
+export const MAX_LONG_RUN_TIMEOUT_MS = intEnv("MAX_LONG_RUN_TIMEOUT_MS", 365 * 24 * 60 * 60 * 1000);
 
 function intEnv(name: string, fallback: number): number {
   const raw = process.env[name];

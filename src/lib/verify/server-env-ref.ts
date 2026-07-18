@@ -3,8 +3,8 @@ const ALIAS_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const PROFILE_RE = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
 const SERVER_REF_RE = /^@server:([A-Za-z0-9][A-Za-z0-9_.-]{0,63})$/;
 const PROFILE_SELECTOR_KEY = "VERIFY_SERVER_ENV_PROFILE";
-const DEFAULT_MAX_ENV_VARS = 50;
-const DEFAULT_MAX_VALUE_LENGTH = 4_096;
+const DEFAULT_MAX_ENV_VARS = 500;
+const DEFAULT_MAX_VALUE_LENGTH = 65_536;
 const RESERVED_TARGET_KEYS = new Set([
   "PATH",
   "NODE_PATH",
