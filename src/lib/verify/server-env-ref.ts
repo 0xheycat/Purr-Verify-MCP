@@ -3,8 +3,8 @@ const ALIAS_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const PROFILE_RE = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
 const SERVER_REF_RE = /^@server:([A-Za-z0-9][A-Za-z0-9_.-]{0,63})$/;
 const PROFILE_SELECTOR_KEY = "VERIFY_SERVER_ENV_PROFILE";
-const MAX_ENV_VARS = 50;
-const MAX_VALUE_LENGTH = 4_096;
+const DEFAULT_MAX_ENV_VARS = 50;
+const DEFAULT_MAX_VALUE_LENGTH = 4_096;
 const RESERVED_TARGET_KEYS = new Set([
   "PATH",
   "NODE_PATH",
@@ -29,6 +29,28 @@ export interface ServerEnvAliasDiscovery {
   aliases: string[];
   valuesIncluded: false;
   sourceKeysIncluded: false;
+}
+
+export interface ServerEnvProfileDiscovery {
+  configured: boolean;
+  profiles: string[];
+  ignoredEntries: number;
+  invalidConfiguration: boolean;
+  valuesIncluded: false;
+  environmentKeysIncluded: false;
+}
+
+function positiveInteger(raw: string | undefined, fallback: number): number {
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function maxEnvironmentVariables(): number {
+  return positiveInteger(process.env.VERIFY_ENV_MAX_KEYS, DEFAULT_MAX_ENV_VARS);
+}
+
+function maxEnvironmentValueLength(): number {
+  return positiveInteger(process.env.VERIFY_ENV_MAX_VALUE_LENGTH, DEFAULT_MAX_VALUE_LENGTH);
 }
 
 /**
@@ -73,32 +95,48 @@ export function listServerEnvAliases(
   };
 }
 
-/**
- * Parse operator-owned runtime profiles. Profile contents may contain plain
- * values and @server:<alias> references, but never resolved values.
- */
-export function parseServerEnvProfiles(
-  raw = process.env.VERIFY_SERVER_ENV_PROFILES ?? "",
-): Map<string, Record<string, string>> {
-  if (!raw.trim()) return new Map();
+function inspectServerEnvProfiles(raw: string): {
+  profiles: Map<string, Record<string, string>>;
+  ignoredEntries: number;
+  invalidConfiguration: boolean;
+} {
+  if (!raw.trim()) {
+    return { profiles: new Map(), ignoredEntries: 0, invalidConfiguration: false };
+  }
+
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return new Map();
+    return { profiles: new Map(), ignoredEntries: 0, invalidConfiguration: true };
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return new Map();
+    return { profiles: new Map(), ignoredEntries: 0, invalidConfiguration: true };
   }
 
   const profiles = new Map<string, Record<string, string>>();
+  let ignoredEntries = 0;
+  const maxKeys = maxEnvironmentVariables();
+  const maxValueLength = maxEnvironmentValueLength();
+
   for (const [rawName, rawEnv] of Object.entries(parsed as Record<string, unknown>)) {
     const name = rawName.trim().toLowerCase();
-    if (!PROFILE_RE.test(name)) continue;
-    if (!rawEnv || typeof rawEnv !== "object" || Array.isArray(rawEnv)) continue;
+    if (
+      !PROFILE_RE.test(name) ||
+      !rawEnv ||
+      typeof rawEnv !== "object" ||
+      Array.isArray(rawEnv)
+    ) {
+      ignoredEntries++;
+      continue;
+    }
 
     const entries = Object.entries(rawEnv as Record<string, unknown>);
-    if (entries.length === 0 || entries.length > MAX_ENV_VARS) continue;
+    if (entries.length === 0 || entries.length > maxKeys) {
+      ignoredEntries++;
+      continue;
+    }
+
     const env: Record<string, string> = {};
     let valid = true;
     for (const [key, value] of entries) {
@@ -106,26 +144,73 @@ export function parseServerEnvProfiles(
         key === PROFILE_SELECTOR_KEY ||
         !ENV_KEY_RE.test(key) ||
         typeof value !== "string" ||
-        value.length > MAX_VALUE_LENGTH
+        value.length > maxValueLength
       ) {
         valid = false;
         break;
       }
       env[key] = value;
     }
+
     if (valid) profiles.set(name, env);
+    else ignoredEntries++;
   }
-  return profiles;
+
+  return { profiles, ignoredEntries, invalidConfiguration: false };
+}
+
+/**
+ * Parse operator-owned runtime profiles. Profile contents may contain plain
+ * values and @server:<alias> references, but never resolved values.
+ */
+export function parseServerEnvProfiles(
+  raw = process.env.VERIFY_SERVER_ENV_PROFILES ?? "",
+): Map<string, Record<string, string>> {
+  return inspectServerEnvProfiles(raw).profiles;
+}
+
+/**
+ * Return safe public profile labels plus configuration diagnostics. Profile
+ * contents, environment keys, aliases, source keys, and values are omitted.
+ */
+export function listServerEnvProfiles(
+  raw = process.env.VERIFY_SERVER_ENV_PROFILES ?? "",
+): ServerEnvProfileDiscovery {
+  const inspected = inspectServerEnvProfiles(raw);
+  const profiles = [...inspected.profiles.keys()].sort((a, b) => a.localeCompare(b));
+  return {
+    configured: profiles.length > 0,
+    profiles,
+    ignoredEntries: inspected.ignoredEntries,
+    invalidConfiguration: inspected.invalidConfiguration,
+    valuesIncluded: false,
+    environmentKeysIncluded: false,
+  };
 }
 
 function expandServerEnvProfile(
   input: Record<string, string>,
   profilesRaw = process.env.VERIFY_SERVER_ENV_PROFILES ?? "",
+  requestedProfile?: string,
 ): ServerEnvRefResolution {
   const explicitEnv = { ...input };
-  const rawProfile = explicitEnv[PROFILE_SELECTOR_KEY];
+  const legacyProfile = explicitEnv[PROFILE_SELECTOR_KEY];
   delete explicitEnv[PROFILE_SELECTOR_KEY];
 
+  if (
+    requestedProfile &&
+    legacyProfile &&
+    requestedProfile.trim().toLowerCase() !== legacyProfile.trim().toLowerCase()
+  ) {
+    return {
+      ok: false,
+      reason: "server environment profile selectors conflict",
+      env: {},
+      aliases: [],
+    };
+  }
+
+  const rawProfile = requestedProfile ?? legacyProfile;
   if (rawProfile == null || rawProfile.trim() === "") {
     return { ok: true, env: explicitEnv, aliases: [] };
   }
@@ -160,10 +245,12 @@ function expandServerEnvProfile(
       };
     }
   }
-  if (Object.keys(profileEnv).length + Object.keys(explicitEnv).length > MAX_ENV_VARS) {
+
+  const maxKeys = maxEnvironmentVariables();
+  if (Object.keys(profileEnv).length + Object.keys(explicitEnv).length > maxKeys) {
     return {
       ok: false,
-      reason: `combined environment exceeds max ${MAX_ENV_VARS} vars`,
+      reason: `combined environment exceeds configured max ${maxKeys} vars`,
       env: {},
       aliases: [],
     };
@@ -179,26 +266,34 @@ function expandServerEnvProfile(
 
 /**
  * Resolve env values written as @server:<alias>. Plain values are preserved.
- * A client may select one server-owned profile with the control key
- * VERIFY_SERVER_ENV_PROFILE; that selector is consumed and never reaches the
- * child process. Resolution happens before durable job creation, so a missing
- * profile or alias fails closed without creating durable job state.
+ * A client may select one server-owned profile with the first-class
+ * server_env_profile field or the legacy VERIFY_SERVER_ENV_PROFILE control key.
+ * The selector is consumed and never reaches the child process. Resolution
+ * happens before durable job creation, so a missing selected profile or backing
+ * alias stops only that job before execution rather than creating a misleading
+ * partially configured run.
  */
 export function resolveInlineServerEnvRefs(
   input: Record<string, string>,
   options: {
     allowlistRaw?: string;
     profilesRaw?: string;
+    profileName?: string;
     sourceEnv?: EnvironmentSource;
   } = {},
 ): ServerEnvRefResolution {
-  const expanded = expandServerEnvProfile(input, options.profilesRaw);
+  const expanded = expandServerEnvProfile(
+    input,
+    options.profilesRaw,
+    options.profileName,
+  );
   if (!expanded.ok) return expanded;
 
   const allowlist = parseServerEnvRefAllowlist(options.allowlistRaw);
   const sourceEnv: EnvironmentSource = options.sourceEnv ?? process.env;
   const env: Record<string, string> = {};
   const aliases: string[] = [];
+  const maxValueLength = maxEnvironmentValueLength();
 
   for (const [targetKey, inputValue] of Object.entries(expanded.env)) {
     if (!ENV_KEY_RE.test(targetKey)) {
@@ -252,10 +347,10 @@ export function resolveInlineServerEnvRefs(
         aliases: [],
       };
     }
-    if (resolvedValue.length > MAX_VALUE_LENGTH) {
+    if (resolvedValue.length > maxValueLength) {
       return {
         ok: false,
-        reason: `server environment alias value is too long: ${alias}`,
+        reason: `server environment alias value exceeds configured max: ${alias}`,
         env: {},
         aliases: [],
       };
