@@ -7,7 +7,7 @@
 
 import type { NextRequest } from "next/server";
 
-export const VERIFY_MCP_APP_URI = "ui://purr/verify-workbench.html";
+export const VERIFY_MCP_APP_URI = "ui://purr/verify-workbench-v2.html";
 export const VERIFY_MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 export const VERIFY_MCP_OUTPUT_SCHEMA = Object.freeze({
   type: "object",
@@ -21,9 +21,6 @@ export const VERIFY_MCP_OUTPUT_SCHEMA = Object.freeze({
     payload: {},
   },
 });
-
-const EXT_APPS_MODULE =
-  "https://cdn.jsdelivr.net/npm/@modelcontextprotocol/ext-apps@1.7.2/+esm";
 
 const UI_TOOLS = new Set([
   "health_check",
@@ -69,8 +66,8 @@ export function verifyMcpAppToolMeta(toolName: string): Record<string, unknown> 
       resourceUri: VERIFY_MCP_APP_URI,
       visibility: ["model"],
     },
-    // Compatibility alias used by older MCP Apps-compatible hosts.
-    "ui/resourceUri": VERIFY_MCP_APP_URI,
+    // ChatGPT compatibility alias for the MCP App template.
+    "openai/outputTemplate": VERIFY_MCP_APP_URI,
   };
 }
 
@@ -111,13 +108,8 @@ export function listVerifyMcpAppResources() {
   ];
 }
 
-export function readVerifyMcpAppResource(req: NextRequest, uri: string) {
+export function readVerifyMcpAppResource(_req: NextRequest, uri: string) {
   if (uri !== VERIFY_MCP_APP_URI) return null;
-  const origin = publicOrigin(req);
-  const csp = {
-    resourceDomains: [origin, "https://cdn.jsdelivr.net"],
-    connectDomains: [origin, "https://cdn.jsdelivr.net"],
-  };
   return {
     contents: [
       {
@@ -126,7 +118,6 @@ export function readVerifyMcpAppResource(req: NextRequest, uri: string) {
         text: verifyMcpAppHtml(),
         _meta: {
           ui: {
-            csp,
             prefersBorder: true,
           },
         },
@@ -237,12 +228,6 @@ function extractToolPayload(result: Record<string, unknown>): unknown {
   } catch {
     return { text };
   }
-}
-
-function publicOrigin(req: NextRequest): string {
-  const configured = process.env.PUBLIC_BASE_URL?.trim();
-  if (configured) return configured.replace(/\/+$/, "");
-  return new URL(req.url).origin;
 }
 
 function inferStatus(payload: unknown, isError: boolean): string {
@@ -374,69 +359,70 @@ function verifyMcpAppHtml(): string {
   </head>
   <body>
     <main id="app" class="shell"><section class="empty">Connecting to Purr Verify…</section></main>
-    <script type="module">
-      import {
-        App,
-        applyDocumentTheme,
-        applyHostFonts,
-        applyHostStyleVariables
-      } from "${EXT_APPS_MODULE}";
-
+    <script>
       const root = document.querySelector("#app");
-      let card = null;
       let expanded = true;
-      let connected = false;
-      let connectionError = null;
+      let card = normalizeResult(
+        window.openai?.toolOutput,
+        window.openai?.toolResponseMetadata
+      );
 
-      const app = new App({ name: "purr-verify-workbench", version: "0.1.0" }, {});
+      applyHostGlobals(window.openai || {});
+      render();
 
-      app.ontoolresult = (result) => {
-        const structured = result?.structuredContent;
-        const meta = result?._meta || {};
-        card = structured?.kind === "purr-verify-card"
-          ? structured
-          : {
-              kind: "purr-verify-card",
-              tool: meta.tool || "purr_verify",
-              status: result?.isError ? "failed" : "ready",
-              isError: Boolean(result?.isError),
-              payload: structured || parseTextPayload(result?.content)
-            };
+      window.addEventListener("openai:set_globals", (event) => {
+        const globals = event.detail?.globals || {};
+        applyHostGlobals(globals);
+        const output = globals.toolOutput ?? window.openai?.toolOutput;
+        const metadata = globals.toolResponseMetadata ?? window.openai?.toolResponseMetadata;
+        const next = normalizeResult(output, metadata);
+        if (next) card = next;
         render();
-      };
+      }, { passive: true });
 
-      app.onhostcontextchanged = (context) => {
-        const current = app.getHostContext() || {};
-        const next = { ...current, ...context };
-        if (next.theme) applyDocumentTheme(next.theme);
-        if (next.styles?.variables) applyHostStyleVariables(next.styles.variables);
-        if (next.styles?.css?.fonts) applyHostFonts(next.styles.css.fonts);
-        const insets = next.safeAreaInsets;
+      window.addEventListener("message", (event) => {
+        if (event.source !== window.parent) return;
+        const message = event.data;
+        if (!message || message.jsonrpc !== "2.0") return;
+        if (message.method !== "ui/notifications/tool-result") return;
+        const next = normalizeResult(message.params);
+        if (next) card = next;
+        render();
+      }, { passive: true });
+
+      function normalizeResult(result, metadata = {}) {
+        if (result === undefined || result === null) return null;
+        const full = result && typeof result === "object" ? result : {};
+        const structured = full.structuredContent ?? result;
+        if (structured?.kind === "purr-verify-card") return structured;
+        const meta = full._meta || metadata || {};
+        return {
+          kind: "purr-verify-card",
+          tool: meta.tool || "purr_verify",
+          status: full.isError ? "failed" : "ready",
+          isError: Boolean(full.isError),
+          payload: structured ?? parseTextPayload(full.content)
+        };
+      }
+
+      function applyHostGlobals(globals) {
+        if (globals.theme) document.documentElement.style.colorScheme = globals.theme;
+        const variables = globals.styles?.variables;
+        if (variables && typeof variables === "object") {
+          for (const [name, value] of Object.entries(variables)) {
+            if (typeof value === "string") document.documentElement.style.setProperty(name, value);
+          }
+        }
+        const insets = globals.safeAreaInsets;
         if (insets) {
           document.body.style.padding = insets.top + "px " + insets.right + "px " + insets.bottom + "px " + insets.left + "px";
         }
-      };
-
-      try {
-        await app.connect();
-        const context = app.getHostContext();
-        if (context?.theme) applyDocumentTheme(context.theme);
-        if (context?.styles?.variables) applyHostStyleVariables(context.styles.variables);
-        if (context?.styles?.css?.fonts) applyHostFonts(context.styles.css.fonts);
-        connected = true;
-      } catch (error) {
-        connectionError = error instanceof Error ? error.message : String(error);
       }
-      render();
 
       function render() {
         if (!root) return;
-        if (connectionError) {
-          root.replaceChildren(node("section", "empty", "UI connection failed: " + connectionError));
-          return;
-        }
-        if (!connected || !card) {
-          root.replaceChildren(node("section", "empty", connected ? "Waiting for a tool result." : "Connecting to Purr Verify…"));
+        if (!card) {
+          root.replaceChildren(node("section", "empty", "Waiting for a tool result."));
           return;
         }
 
