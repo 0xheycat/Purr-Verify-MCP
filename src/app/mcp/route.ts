@@ -23,6 +23,13 @@ import {
   recordVerifyDebugError,
   verifyDebugStatus,
 } from "@/lib/verify/debug";
+import {
+  decorateVerifyMcpInitialize,
+  decorateVerifyMcpToolResults,
+  decorateVerifyMcpToolsList,
+  listVerifyMcpAppResources,
+  readVerifyMcpAppResource,
+} from "@/lib/verify/mcp-app";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,6 +40,7 @@ interface McpMessage {
   params?: {
     name?: string;
     arguments?: Record<string, unknown>;
+    uri?: string;
   };
 }
 
@@ -198,12 +206,33 @@ export async function POST(req: NextRequest) {
 
   if (messages.length === 1 && messages[0]?.method === "initialize") {
     const { json } = await mcpJson(req);
-    return Response.json(attachInstructions(json), { status: 200, headers: { "x-purr-request-id": requestId, "cache-control": "no-store" } });
+    const initialized = decorateVerifyMcpInitialize(attachInstructions(json));
+    return Response.json(initialized, { status: 200, headers: { "x-purr-request-id": requestId, "cache-control": "no-store" } });
   }
 
   if (messages.length === 1 && messages[0]?.method === "tools/list") {
     const { json } = await mcpJson(req);
-    return Response.json(appendStartupTools(json), { status: 200, headers: { "x-purr-request-id": requestId, "cache-control": "no-store" } });
+    const tools = decorateVerifyMcpToolsList(appendStartupTools(json));
+    return Response.json(tools, { status: 200, headers: { "x-purr-request-id": requestId, "cache-control": "no-store" } });
+  }
+
+  if (messages.length === 1 && messages[0]?.method === "resources/list") {
+    return Response.json(
+      rpcResult(messages[0].id ?? null, { resources: listVerifyMcpAppResources() }),
+      { status: 200, headers: { "x-purr-request-id": requestId, "cache-control": "no-store" } }
+    );
+  }
+
+  if (messages.length === 1 && messages[0]?.method === "resources/read") {
+    const uri = messages[0].params?.uri || "";
+    const resource = readVerifyMcpAppResource(req, uri);
+    const packet = resource
+      ? rpcResult(messages[0].id ?? null, resource)
+      : rpcError(messages[0].id ?? null, -32002, `Resource not found: ${uri}`);
+    return Response.json(packet, {
+      status: 200,
+      headers: { "x-purr-request-id": requestId, "cache-control": "no-store" },
+    });
   }
 
   if (messages.length === 1 && isReadOperatingGuideCall(messages[0])) {
@@ -241,18 +270,25 @@ export async function POST(req: NextRequest) {
   const routed = routeMcpExecutionBody(body);
   const routedRequest = routed.changed ? requestWithJsonBody(req, routed.body) : req;
   const response = await handleMcp(routedRequest);
-  const needsDecoration =
+  const toolCalls = messages
+    .filter((message) => message.method === "tools/call")
+    .map((message) => ({ id: message.id, tool: message.params?.name }));
+  const needsExecutionDecoration =
     routed.changed || routed.toolNames.some((toolName) => toolName === "health_check");
-  if (!needsDecoration) return withDebugHeaders(response, requestId);
+  const needsUiDecoration = toolCalls.length > 0;
+  if (!needsExecutionDecoration && !needsUiDecoration) {
+    return withDebugHeaders(response, requestId);
+  }
 
   const json = await response.json();
-  return Response.json(
-    decorateMcpResponse(json, routed.routings, routed.toolNames),
-    {
-      status: response.status,
-      headers: { "x-purr-request-id": requestId, "cache-control": "no-store" },
-    }
-  );
+  const executionDecorated = needsExecutionDecoration
+    ? decorateMcpResponse(json, routed.routings, routed.toolNames)
+    : json;
+  const decorated = decorateVerifyMcpToolResults(executionDecorated, toolCalls);
+  return Response.json(decorated, {
+    status: response.status,
+    headers: { "x-purr-request-id": requestId, "cache-control": "no-store" },
+  });
 }
 
 export async function GET(req: NextRequest) {
