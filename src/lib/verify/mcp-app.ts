@@ -9,6 +9,18 @@ import type { NextRequest } from "next/server";
 
 export const VERIFY_MCP_APP_URI = "ui://purr/verify-workbench.html";
 export const VERIFY_MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
+export const VERIFY_MCP_OUTPUT_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: ["kind", "tool", "status", "isError", "payload"],
+  properties: {
+    kind: { type: "string", const: "purr-verify-card" },
+    tool: { type: "string", minLength: 1 },
+    status: { type: "string", minLength: 1 },
+    isError: { type: "boolean" },
+    payload: {},
+  },
+});
 
 const EXT_APPS_MODULE =
   "https://cdn.jsdelivr.net/npm/@modelcontextprotocol/ext-apps@1.7.2/+esm";
