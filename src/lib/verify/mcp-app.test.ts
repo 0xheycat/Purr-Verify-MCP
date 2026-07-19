@@ -12,7 +12,11 @@ import {
 
 describe("Purr Verify MCP App compatibility", () => {
   test("advertises the UI resource capability", () => {
-    const packet = {
+    const packet: {
+      jsonrpc: string;
+      id: number;
+      result: { capabilities: Record<string, unknown> };
+    } = {
       jsonrpc: "2.0",
       id: 1,
       result: { capabilities: { tools: {} } },
@@ -27,7 +31,11 @@ describe("Purr Verify MCP App compatibility", () => {
   });
 
   test("attaches the shared workbench only to supported tools", () => {
-    const packet = {
+    const packet: {
+      jsonrpc: string;
+      id: number;
+      result: { tools: Array<Record<string, unknown>> };
+    } = {
       jsonrpc: "2.0",
       id: 2,
       result: {
@@ -48,7 +56,14 @@ describe("Purr Verify MCP App compatibility", () => {
   });
 
   test("preserves text content and adds a structured card", () => {
-    const packet = {
+    const packet: {
+      jsonrpc: string;
+      id: string;
+      result: Record<string, unknown> & {
+        content: Array<{ type: string; text: string }>;
+        isError: boolean;
+      };
+    } = {
       jsonrpc: "2.0",
       id: "job-status",
       result: {
