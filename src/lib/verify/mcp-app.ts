@@ -88,8 +88,7 @@ export function verifyMcpAppCard(
   };
 }
 
-export function verifyMcpAppResultMeta(tool: string): Record<string, unknown> | undefined {
-  if (!UI_TOOLS.has(tool)) return undefined;
+export function verifyMcpAppResultMeta(tool: string): Record<string, unknown> {
   return {
     tool,
     card: {
