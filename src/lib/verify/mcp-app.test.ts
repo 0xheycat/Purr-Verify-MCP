@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Script } from "node:vm";
 import type { NextRequest } from "next/server";
 import {
   VERIFY_MCP_APP_MIME_TYPE,
@@ -143,6 +144,10 @@ describe("Purr Verify MCP App compatibility", () => {
     expect(resource?.contents[0].text).not.toContain("cdn.jsdelivr.net");
     expect(resource?.contents[0].text).not.toContain("@modelcontextprotocol/ext-apps");
     expect(resource?.contents[0].text).toContain("Purr Verify Workbench");
+    const widgetScript =
+      resource?.contents[0].text.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? "";
+    expect(widgetScript).not.toBe("");
+    expect(() => new Script(widgetScript)).not.toThrow();
     expect("csp" in (resource?.contents[0]._meta.ui ?? {})).toBe(false);
     expect(readVerifyMcpAppResource(request, "ui://missing")).toBeNull();
   });
