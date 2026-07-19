@@ -53,7 +53,7 @@ describe("Purr Verify MCP App compatibility", () => {
     expect(packet.result.tools[1].outputSchema).toEqual(VERIFY_MCP_OUTPUT_SCHEMA);
     expect(packet.result.tools[0]._meta).toEqual({
       ui: { resourceUri: VERIFY_MCP_APP_URI, visibility: ["model"] },
-      "ui/resourceUri": VERIFY_MCP_APP_URI,
+      "openai/outputTemplate": VERIFY_MCP_APP_URI,
     });
     expect(packet.result.tools[1]._meta).toBeUndefined();
   });
@@ -137,8 +137,13 @@ describe("Purr Verify MCP App compatibility", () => {
     const request = { url: "https://verify.example/mcp" } as NextRequest;
     const resource = readVerifyMcpAppResource(request, VERIFY_MCP_APP_URI);
     expect(resource?.contents[0].mimeType).toBe(VERIFY_MCP_APP_MIME_TYPE);
-    expect(resource?.contents[0].text).toContain("@modelcontextprotocol/ext-apps@1.7.2");
+    expect(resource?.contents[0].text).toContain("window.openai?.toolOutput");
+    expect(resource?.contents[0].text).toContain("openai:set_globals");
+    expect(resource?.contents[0].text).toContain("ui/notifications/tool-result");
+    expect(resource?.contents[0].text).not.toContain("cdn.jsdelivr.net");
+    expect(resource?.contents[0].text).not.toContain("@modelcontextprotocol/ext-apps");
     expect(resource?.contents[0].text).toContain("Purr Verify Workbench");
+    expect("csp" in (resource?.contents[0]._meta.ui ?? {})).toBe(false);
     expect(readVerifyMcpAppResource(request, "ui://missing")).toBeNull();
   });
 });
