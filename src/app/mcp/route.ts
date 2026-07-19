@@ -236,12 +236,20 @@ export async function POST(req: NextRequest) {
   }
 
   if (messages.length === 1 && isReadOperatingGuideCall(messages[0])) {
-    return Response.json(readGuideResponse(messages[0].id ?? null), { status: 200, headers: { "x-purr-request-id": requestId, "cache-control": "no-store" } });
+    const id = messages[0].id ?? null;
+    const result = decorateVerifyMcpToolResults(readGuideResponse(id), [
+      { id, tool: "read_operating_guide" },
+    ]);
+    return Response.json(result, { status: 200, headers: { "x-purr-request-id": requestId, "cache-control": "no-store" } });
   }
 
   if (messages.length === 1 && isLocalDebugCall(messages[0])) {
-    const result = await debugToolResponse(req, messages[0], requestId);
-    return Response.json(result, { status: 200, headers: { "x-purr-request-id": requestId, "cache-control": "no-store" } });
+    const message = messages[0];
+    const result = await debugToolResponse(req, message, requestId);
+    const decorated = decorateVerifyMcpToolResults(result, [
+      { id: message.id, tool: message.params?.name },
+    ]);
+    return Response.json(decorated, { status: 200, headers: { "x-purr-request-id": requestId, "cache-control": "no-store" } });
   }
 
   if (requiresCheck(body)) {
