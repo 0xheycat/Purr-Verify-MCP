@@ -7,7 +7,7 @@
 
 import type { NextRequest } from "next/server";
 
-export const VERIFY_MCP_APP_URI = "ui://purr/verify-workbench-v2.html";
+export const VERIFY_MCP_APP_URI = "ui://purr/verify-workbench-v3.html";
 export const VERIFY_MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 export const VERIFY_MCP_OUTPUT_SCHEMA = Object.freeze({
   type: "object",
