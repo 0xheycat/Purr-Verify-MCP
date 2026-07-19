@@ -161,14 +161,16 @@ export function decorateVerifyMcpToolsList(json: unknown): unknown {
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
       const tool = entry as Record<string, unknown>;
       const name = typeof tool.name === "string" ? tool.name : "";
+      tool.outputSchema = VERIFY_MCP_OUTPUT_SCHEMA;
       const meta = verifyMcpAppToolMeta(name);
-      if (!meta) continue;
-      tool._meta = {
-        ...(tool._meta && typeof tool._meta === "object" && !Array.isArray(tool._meta)
-          ? (tool._meta as Record<string, unknown>)
-          : {}),
-        ...meta,
-      };
+      if (meta) {
+        tool._meta = {
+          ...(tool._meta && typeof tool._meta === "object" && !Array.isArray(tool._meta)
+            ? (tool._meta as Record<string, unknown>)
+            : {}),
+          ...meta,
+        };
+      }
     }
   });
   return json;
@@ -181,13 +183,13 @@ export function decorateVerifyMcpToolResults(
   const toolById = new Map<string, string>();
   let singleTool = "";
   for (const call of calls) {
-    if (!call.tool || !UI_TOOLS.has(call.tool)) continue;
+    if (!call.tool) continue;
     singleTool = call.tool;
     toolById.set(String(call.id ?? "null"), call.tool);
   }
   forEachPacket(json, (packet) => {
     const tool = toolById.get(String(packet.id ?? "null")) || singleTool;
-    if (!tool || !UI_TOOLS.has(tool)) return;
+    if (!tool) return;
     const result = packet.result;
     if (!result || typeof result !== "object" || Array.isArray(result)) return;
     const payload = extractToolPayload(result);

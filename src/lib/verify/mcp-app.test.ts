@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 import {
   VERIFY_MCP_APP_MIME_TYPE,
   VERIFY_MCP_APP_URI,
+  VERIFY_MCP_OUTPUT_SCHEMA,
   decorateVerifyMcpInitialize,
   decorateVerifyMcpToolResults,
   decorateVerifyMcpToolsList,
@@ -48,6 +49,8 @@ describe("Purr Verify MCP App compatibility", () => {
 
     decorateVerifyMcpToolsList(packet);
 
+    expect(packet.result.tools[0].outputSchema).toEqual(VERIFY_MCP_OUTPUT_SCHEMA);
+    expect(packet.result.tools[1].outputSchema).toEqual(VERIFY_MCP_OUTPUT_SCHEMA);
     expect(packet.result.tools[0]._meta).toEqual({
       ui: { resourceUri: VERIFY_MCP_APP_URI, visibility: ["model"] },
       "ui/resourceUri": VERIFY_MCP_APP_URI,
@@ -92,6 +95,36 @@ describe("Purr Verify MCP App compatibility", () => {
     expect(packet.result._meta).toEqual({
       tool: "purr_get_job_status",
       card: { kind: "purr-verify-card", tool: "purr_get_job_status" },
+    });
+  });
+
+  test("adds the output contract to non-UI startup tools", () => {
+    const packet: {
+      jsonrpc: string;
+      id: string;
+      result: Record<string, unknown> & {
+        content: Array<{ type: string; text: string }>;
+        isError: boolean;
+      };
+    } = {
+      jsonrpc: "2.0",
+      id: "guide",
+      result: {
+        content: [{ type: "text", text: JSON.stringify({ service: "verify" }) }],
+        isError: false,
+      },
+    };
+
+    decorateVerifyMcpToolResults(packet, [
+      { id: "guide", tool: "read_operating_guide" },
+    ]);
+
+    expect(packet.result.structuredContent).toEqual({
+      kind: "purr-verify-card",
+      tool: "read_operating_guide",
+      status: "ready",
+      isError: false,
+      payload: { service: "verify" },
     });
   });
 
