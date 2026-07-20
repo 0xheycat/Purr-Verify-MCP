@@ -7,7 +7,7 @@
 
 import type { NextRequest } from "next/server";
 
-export const VERIFY_MCP_APP_URI = "ui://purr/verify-workbench-v5.html";
+export const VERIFY_MCP_APP_URI = "ui://purr/verify-workbench-v6.html";
 export const VERIFY_MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 export const VERIFY_MCP_OUTPUT_SCHEMA = Object.freeze({
   type: "object",
@@ -660,7 +660,7 @@ function verifyMcpAppHtml(): string {
           const httpFailures = firstArray(payload, ["httpFailures", "responses"]);
           const stdout = firstValue(payload, ["stdout"]);
           const stderr = firstValue(payload, ["stderr"]);
-          const consoleText = [stdout, stderr].filter((value) => typeof value === "string" && value).join("\n");
+          const consoleText = [stdout, stderr].filter((value) => typeof value === "string" && value).join("\\n");
           return {
             summary: pageErrors.length || failedRequests.length || httpFailures.length ? "Browser diagnostics found runtime failures." : "No browser runtime failures were reported.",
             rows: compactRows([

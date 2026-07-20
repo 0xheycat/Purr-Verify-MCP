@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Script } from "node:vm";
+import ts from "typescript";
 import type { NextRequest } from "next/server";
 import { VERIFY_DEBUG_TOOLS } from "./debug";
 import { VERIFY_MCP_TOOLS } from "./mcp";
@@ -187,7 +188,7 @@ describe("Purr Verify MCP App compatibility", () => {
     expect(resource?.contents[0].text).not.toContain("cdn.jsdelivr.net");
     expect(resource?.contents[0].text).not.toContain("@modelcontextprotocol/ext-apps");
     expect(resource?.contents[0].text).toContain("Purr Verify Workbench");
-    expect(resource?.contents[0].text).toContain("verify-workbench-v5");
+    expect(resource?.contents[0].text).toContain("verify-workbench-v6");
     expect(resource?.contents[0].text).toContain("let expanded = false");
     expect(resource?.contents[0].text).toContain("browserPresentation");
     expect(resource?.contents[0].text).toContain("Pursr and a Chrome-compatible browser are ready.");
@@ -198,8 +199,20 @@ describe("Purr Verify MCP App compatibility", () => {
       resource?.contents[0].text.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? "";
     expect(widgetScript).not.toBe("");
     expect(() => new Script(widgetScript)).not.toThrow();
+    const browserDiagnostics =
+      ts.transpileModule(widgetScript, {
+        reportDiagnostics: true,
+        compilerOptions: { target: ts.ScriptTarget.ES2022 },
+      }).diagnostics ?? [];
+    expect(
+      browserDiagnostics.map((diagnostic) => ({
+        code: diagnostic.code,
+        message: ts.flattenDiagnosticMessageText(diagnostic.messageText, " "),
+      })),
+    ).toEqual([]);
     expect(resource?.contents[0]._meta.ui.prefersBorder).toBe(false);
     expect("csp" in (resource?.contents[0]._meta.ui ?? {})).toBe(false);
+    expect(readVerifyMcpAppResource(request, "ui://purr/verify-workbench-v5.html")).toBeNull();
     expect(readVerifyMcpAppResource(request, "ui://purr/verify-workbench-v4.html")).toBeNull();
     expect(readVerifyMcpAppResource(request, "ui://purr/verify-workbench-v3.html")).toBeNull();
     expect(readVerifyMcpAppResource(request, "ui://missing")).toBeNull();
