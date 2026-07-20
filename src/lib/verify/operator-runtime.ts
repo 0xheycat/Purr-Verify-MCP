@@ -110,6 +110,21 @@ export function classifyDestructiveCommand(display: string): string | null {
   return rules.find(([rule]) => rule.test(value))?.[1] ?? null;
 }
 
+const PROJECT_PROCESS_ENV_KEYS_TO_CLEAR = [
+  "NEXT_DEPLOYMENT_ID",
+  "TURBOPACK",
+  "__NEXT_PRIVATE_ORIGIN",
+  "__NEXT_PRIVATE_STANDALONE_CONFIG",
+] as const;
+
+export function createProjectProcessEnvironment(
+  runtimeEnv: Record<string, string> = {},
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of PROJECT_PROCESS_ENV_KEYS_TO_CLEAR) delete env[key];
+  return { ...env, ...runtimeEnv };
+}
+
 export async function runOperatorCommand(
   step: OperatorCommandStep,
   runtimeEnv: Record<string, string>,
@@ -142,7 +157,7 @@ export async function runOperatorCommand(
     try {
       const child = spawn(program, args, {
         cwd: step.cwd,
-        env: { ...process.env, ...runtimeEnv },
+        env: createProjectProcessEnvironment(runtimeEnv),
         stdio: "ignore",
         shell: false,
         detached: process.platform !== "win32",
@@ -174,7 +189,7 @@ export async function runOperatorCommand(
   return new Promise((resolve) => {
     const child = spawn(program, args, {
       cwd: step.cwd,
-      env: { ...process.env, ...runtimeEnv },
+      env: createProjectProcessEnvironment(runtimeEnv),
       stdio: ["ignore", "pipe", "pipe"],
       shell: false,
       detached: process.platform !== "win32",
