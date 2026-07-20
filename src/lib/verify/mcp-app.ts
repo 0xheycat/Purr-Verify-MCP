@@ -22,35 +22,6 @@ export const VERIFY_MCP_OUTPUT_SCHEMA = Object.freeze({
   },
 });
 
-const UI_TOOLS = new Set([
-  "health_check",
-  "list_verification_jobs",
-  "get_verification_job",
-  "create_verification_job",
-  "cancel_verification_job",
-  "search_verification_history",
-  "get_latest_verification",
-  "get_verification_summary",
-  "compare_verification_jobs",
-  "get_job_log_chunk",
-  "search_job_logs",
-  "purr_discover_projects",
-  "purr_inspect_project",
-  "purr_inspect_runtime",
-  "purr_inspect_environment",
-  "purr_plan_deployment",
-  "purr_run_command",
-  "purr_verify_project",
-  "purr_create_deploy_snapshot",
-  "purr_deploy_project",
-  "purr_restart_service",
-  "purr_check_health",
-  "purr_rollback_deployment",
-  "purr_get_job_status",
-  "purr_get_job_logs",
-  "purr_cancel_job",
-]);
-
 export interface VerifyMcpAppCard {
   kind: "purr-verify-card";
   tool: string;
@@ -60,7 +31,7 @@ export interface VerifyMcpAppCard {
 }
 
 export function verifyMcpAppToolMeta(toolName: string): Record<string, unknown> | undefined {
-  if (!UI_TOOLS.has(toolName)) return undefined;
+  if (!toolName) return undefined;
   return {
     ui: {
       resourceUri: VERIFY_MCP_APP_URI,
@@ -465,7 +436,17 @@ function verifyMcpAppHtml(): string {
 
       function displayFor(tool, payload) {
         const labels = {
+          read_operating_guide: ["?", "Operating guide"],
+          auth_status: ["A", "Authentication status"],
+          debug_status: ["D", "Debug status"],
+          debug_last_errors: ["!", "Recent errors"],
           health_check: ["H", "Service health"],
+          list_allowed_commands: [">_", "Allowed commands"],
+          create_share_link: ["↗", "Share verification"],
+          list_share_links: ["↗", "Verification shares"],
+          revoke_share_links: ["×", "Revoke shares"],
+          purr_list_server_env_aliases: ["E", "Environment aliases"],
+          purr_list_server_env_profiles: ["E", "Environment profiles"],
           list_verification_jobs: ["J", "Verification history"],
           get_verification_job: ["J", "Verification job"],
           create_verification_job: ["▶", "Verification queued"],
@@ -481,7 +462,16 @@ function verifyMcpAppHtml(): string {
           purr_discover_projects: ["D", "Discovered projects"],
           purr_inspect_project: ["I", "Project inspection"],
           purr_inspect_runtime: ["I", "Runtime inspection"],
-          purr_run_command: [">_", "Private command"]
+          purr_inspect_environment: ["E", "Environment inspection"],
+          purr_run_command: [">_", "Private command"],
+          purr_cancel_job: ["×", "Cancel operator job"],
+          cancel_verification_job: ["×", "Cancel verification"],
+          get_job_log_chunk: [">_", "Verification logs"],
+          search_job_logs: ["?", "Search job logs"],
+          compare_verification_jobs: ["Δ", "Compare verifications"],
+          get_verification_summary: ["J", "Verification summary"],
+          get_latest_verification: ["J", "Latest verification"],
+          search_verification_history: ["?", "Search verification history"]
         };
         const item = labels[tool] || ["P", String(tool || "Purr Verify").replaceAll("_", " ")];
         return { icon: item[0], title: item[1], label: findLabel(payload) };

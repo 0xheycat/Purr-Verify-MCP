@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { Script } from "node:vm";
 import type { NextRequest } from "next/server";
+import { VERIFY_DEBUG_TOOLS } from "./debug";
+import { VERIFY_MCP_TOOLS } from "./mcp";
+import { READ_OPERATING_GUIDE_TOOL } from "./operating-guide";
 import {
   VERIFY_MCP_APP_MIME_TYPE,
   VERIFY_MCP_APP_URI,
@@ -32,7 +35,7 @@ describe("Purr Verify MCP App compatibility", () => {
     });
   });
 
-  test("attaches the shared workbench only to supported tools", () => {
+  test("attaches the shared workbench to every visible tool", () => {
     const packet: {
       jsonrpc: string;
       id: number;
@@ -56,7 +59,47 @@ describe("Purr Verify MCP App compatibility", () => {
       ui: { resourceUri: VERIFY_MCP_APP_URI, visibility: ["model"] },
       "openai/outputTemplate": VERIFY_MCP_APP_URI,
     });
-    expect(packet.result.tools[1]._meta).toBeUndefined();
+    expect(packet.result.tools[1]._meta).toEqual({
+      ui: { resourceUri: VERIFY_MCP_APP_URI, visibility: ["model"] },
+      "openai/outputTemplate": VERIFY_MCP_APP_URI,
+    });
+  });
+
+  test("covers the complete live catalog with one readable template", () => {
+    const tools = [
+      READ_OPERATING_GUIDE_TOOL,
+      ...VERIFY_DEBUG_TOOLS,
+      ...VERIFY_MCP_TOOLS,
+    ].map((tool) => ({ ...tool }));
+    const packet: {
+      jsonrpc: string;
+      id: number;
+      result: { tools: Array<Record<string, unknown>> };
+    } = {
+      jsonrpc: "2.0",
+      id: 3,
+      result: { tools },
+    };
+
+    decorateVerifyMcpToolsList(packet);
+
+    expect(new Set(packet.result.tools.map((tool) => tool.name)).size).toBe(36);
+    const templateUris = new Set<string>();
+    for (const tool of packet.result.tools) {
+      expect(tool.outputSchema).toEqual(VERIFY_MCP_OUTPUT_SCHEMA);
+      const meta = tool._meta as Record<string, unknown>;
+      expect(meta["openai/outputTemplate"]).toBe(VERIFY_MCP_APP_URI);
+      expect(meta.ui).toEqual({ resourceUri: VERIFY_MCP_APP_URI, visibility: ["model"] });
+      templateUris.add(String(meta["openai/outputTemplate"]));
+    }
+
+    const request = { url: "https://verify.example/mcp" } as NextRequest;
+    expect([...templateUris]).toEqual([VERIFY_MCP_APP_URI]);
+    for (const uri of templateUris) {
+      expect(readVerifyMcpAppResource(request, uri)?.contents[0].mimeType).toBe(
+        VERIFY_MCP_APP_MIME_TYPE,
+      );
+    }
   });
 
   test("preserves text content and adds a structured card", () => {

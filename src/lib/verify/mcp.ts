@@ -41,7 +41,7 @@ export interface JsonRpcResponse {
   error?: { code: number; message: string; data?: unknown };
 }
 
-interface ToolDef {
+export interface ToolDef {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
@@ -52,7 +52,7 @@ interface ToolDef {
   };
 }
 
-const TOOLS: ToolDef[] = [
+export const VERIFY_MCP_TOOLS: ToolDef[] = [
   ...HISTORY_MCP_TOOLS,
   ...OPERATOR_MCP_TOOLS,
   ...OPERATOR_MUTATION_MCP_TOOLS,
@@ -259,7 +259,7 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
 
     if (method === "tools/list") {
       return rpcResult(rid, {
-        tools: TOOLS.map((t) => ({
+        tools: VERIFY_MCP_TOOLS.map((t) => ({
           name: t.name,
           description: t.description,
           inputSchema: t.inputSchema,
