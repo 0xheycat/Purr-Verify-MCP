@@ -188,7 +188,7 @@ describe("Purr Verify MCP App compatibility", () => {
     expect(resource?.contents[0].text).not.toContain("cdn.jsdelivr.net");
     expect(resource?.contents[0].text).not.toContain("@modelcontextprotocol/ext-apps");
     expect(resource?.contents[0].text).toContain("Purr Verify Workbench");
-    expect(resource?.contents[0].text).toContain("verify-workbench-v6");
+    expect(resource?.contents[0].text).toContain("verify-workbench-v7");
     expect(resource?.contents[0].text).toContain("let expanded = false");
     expect(resource?.contents[0].text).toContain("browserPresentation");
     expect(resource?.contents[0].text).toContain("Pursr and a Chrome-compatible browser are ready.");
@@ -212,6 +212,7 @@ describe("Purr Verify MCP App compatibility", () => {
     ).toEqual([]);
     expect(resource?.contents[0]._meta.ui.prefersBorder).toBe(false);
     expect("csp" in (resource?.contents[0]._meta.ui ?? {})).toBe(false);
+    expect(readVerifyMcpAppResource(request, "ui://purr/verify-workbench-v6.html")).toBeNull();
     expect(readVerifyMcpAppResource(request, "ui://purr/verify-workbench-v5.html")).toBeNull();
     expect(readVerifyMcpAppResource(request, "ui://purr/verify-workbench-v4.html")).toBeNull();
     expect(readVerifyMcpAppResource(request, "ui://purr/verify-workbench-v3.html")).toBeNull();

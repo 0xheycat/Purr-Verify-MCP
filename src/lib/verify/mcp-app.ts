@@ -7,7 +7,7 @@
 
 import type { NextRequest } from "next/server";
 
-export const VERIFY_MCP_APP_URI = "ui://purr/verify-workbench-v6.html";
+export const VERIFY_MCP_APP_URI = "ui://purr/verify-workbench-v7.html";
 export const VERIFY_MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 export const VERIFY_MCP_OUTPUT_SCHEMA = Object.freeze({
   type: "object",
@@ -72,7 +72,7 @@ export function listVerifyMcpAppResources() {
       name: "purr-verify-workbench",
       title: "Purr Verify Workbench",
       description:
-        "Compact tool-native views for verification, VPS operations, browser work sessions, deployment, health, and durable jobs.",
+        "Purr Compact v7 views for verification, VPS operations, browser work sessions, deployment, health, and durable jobs.",
       mimeType: VERIFY_MCP_APP_MIME_TYPE,
     },
   ];
@@ -788,7 +788,9 @@ function verifyMcpAppHtml(): string {
       function normalizedStatus(status, isError) {
         if (isError) return "failed";
         const value = String(status || "ready").toLowerCase();
-        if (/success|complete|completed|ok|healthy/.test(value)) return "ready";
+        if (/success|complete|completed|ok|healthy|verified/.test(value)) return "ready";
+        if (/manual/.test(value)) return "manual required";
+        if (/approval/.test(value)) return "approval required";
         return truncate(value, 22);
       }
 
