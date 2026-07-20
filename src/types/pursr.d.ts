@@ -15,7 +15,14 @@ declare module "pursr/browser-discovery" {
 
 declare module "pursr/session" {
   export class BrowserSessionManager {
-    constructor(options?: { outputDir?: string });
+    constructor(options?: {
+      outputDir?: string;
+      launchBrowser?: (options: Record<string, unknown>) => Promise<unknown>;
+      connectBrowser?: (
+        endpointURL: string,
+        options: Record<string, unknown>,
+      ) => Promise<unknown>;
+    });
     open(input: Record<string, unknown>): Promise<Record<string, unknown>>;
     list(): Array<Record<string, unknown>>;
     snapshot(sessionId: string, options?: Record<string, unknown>): Promise<Record<string, unknown>>;

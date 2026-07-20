@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";
-import { BrowserWorkSessionManager } from "./browser-work";
+import {
+  BrowserWorkSessionManager,
+  createPursrBrowserAdapters,
+} from "./browser-work";
 import {
   BROWSER_WORK_MCP_TOOLS,
   handleBrowserWorkMcpTool,
@@ -47,6 +50,51 @@ describe("Pursr browser work sessions", () => {
     ]);
     expect(BROWSER_WORK_MCP_TOOLS.find((tool) => tool.name === "purr_work_session_act")?.annotations.destructiveHint).toBe(true);
     expect(BROWSER_WORK_MCP_TOOLS.find((tool) => tool.name === "purr_browser_doctor")?.annotations.readOnlyHint).toBe(true);
+  });
+
+  test("injects the installed Playwright driver into Pursr sessions", async () => {
+    const calls: Array<{ kind: string; input: unknown }> = [];
+    const driver = {
+      launch: async (options: Record<string, unknown>) => {
+        calls.push({ kind: "launch", input: options });
+        return { browser: true };
+      },
+      connectOverCDP: async (endpointURL: string, options: Record<string, unknown>) => {
+        calls.push({ kind: "connect", input: { endpointURL, options } });
+        return { browser: true };
+      },
+    };
+    const adapters = createPursrBrowserAdapters(
+      {
+        found: ["/opt/chromium"],
+        preferred: "/opt/chromium",
+        candidates: ["/opt/chromium"],
+        env: {},
+      },
+      driver,
+    );
+
+    await adapters.launchBrowser({ headless: true, slowMo: 15 });
+    await adapters.connectBrowser("http://127.0.0.1:9222", { timeoutMs: 12_000 });
+
+    expect(calls).toEqual([
+      {
+        kind: "launch",
+        input: {
+          headless: true,
+          executablePath: "/opt/chromium",
+          slowMo: 15,
+          args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
+        },
+      },
+      {
+        kind: "connect",
+        input: {
+          endpointURL: "http://127.0.0.1:9222",
+          options: { timeout: 12_000 },
+        },
+      },
+    ]);
   });
 
   test("starts, closes, and reuses a managed dev-only session ID", async () => {

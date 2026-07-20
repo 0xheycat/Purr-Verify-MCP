@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { chromium } from "playwright-core";
 import { MAX_LONG_RUN_TIMEOUT_MS, getConfig } from "./config";
 import { canonicalDirectory } from "./operator-inspection";
 import { redactText } from "./redact";
@@ -77,6 +78,11 @@ interface BrowserDiscoveryResult {
   preferred: string | null;
   candidates: string[];
   env: Record<string, boolean>;
+}
+
+interface PlaywrightChromiumDriver {
+  launch(options: Record<string, unknown>): Promise<unknown>;
+  connectOverCDP(endpointURL: string, options: Record<string, unknown>): Promise<unknown>;
 }
 
 interface BrowserWorkRecord extends BrowserWorkSummary {
@@ -226,6 +232,31 @@ function latestLoopbackUrl(...values: string[]): string | null {
   return latest;
 }
 
+export function createPursrBrowserAdapters(
+  discovery: BrowserDiscoveryResult,
+  driver: PlaywrightChromiumDriver = chromium as unknown as PlaywrightChromiumDriver,
+) {
+  const launchBrowser = async (options: Record<string, unknown> = {}) => {
+    const executablePath =
+      typeof options.executablePath === "string" ? options.executablePath : discovery.preferred;
+    if (!executablePath) {
+      throw new Error("Chrome-compatible browser not found; install one or set PURSR_BROWSER_PATH");
+    }
+    return driver.launch({
+      headless: options.headless !== false,
+      executablePath,
+      slowMo: Math.max(0, Number(options.slowMo) || 0),
+      args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
+    });
+  };
+  const connectBrowser = async (endpointURL: string, options: Record<string, unknown> = {}) => {
+    return driver.connectOverCDP(endpointURL, {
+      timeout: Math.max(1, Number(options.timeoutMs) || 30_000),
+    });
+  };
+  return { launchBrowser, connectBrowser };
+}
+
 async function loadPursrRuntime(outputDir: string): Promise<{
   version: string;
   discovery: BrowserDiscoveryResult;
@@ -237,10 +268,15 @@ async function loadPursrRuntime(outputDir: string): Promise<{
     import("pursr"),
   ]);
   const discovery = discoverBrowsers() as BrowserDiscoveryResult;
+  const { launchBrowser, connectBrowser } = createPursrBrowserAdapters(discovery);
   return {
     version: String(pursr.VERSION ?? "unknown"),
     discovery,
-    manager: new BrowserSessionManager({ outputDir }) as PursrBrowserSessionManager,
+    manager: new BrowserSessionManager({
+      outputDir,
+      launchBrowser,
+      connectBrowser,
+    }) as PursrBrowserSessionManager,
   };
 }
 
@@ -249,11 +285,12 @@ export async function browserDoctor(): Promise<Record<string, unknown>> {
   const outputDir = path.join(cfg.dataDir, "browser-work");
   try {
     const runtime = await loadPursrRuntime(outputDir);
-    let playwrightCore: string | null = null;
+    let playwrightCore = "available";
     try {
-      playwrightCore = require.resolve("playwright-core");
+      const resolved = require.resolve("playwright-core");
+      if (typeof resolved === "string") playwrightCore = resolved;
     } catch {
-      // Optional until browser work is used.
+      // The static import above is the authoritative runtime dependency.
     }
     return {
       status: runtime.discovery.preferred && playwrightCore ? "ready" : "needs_setup",
