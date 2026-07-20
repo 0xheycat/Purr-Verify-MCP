@@ -5,7 +5,6 @@ import { VERIFY_DEBUG_TOOLS } from "./debug";
 import { VERIFY_MCP_TOOLS } from "./mcp";
 import { READ_OPERATING_GUIDE_TOOL } from "./operating-guide";
 import {
-  VERIFY_MCP_APP_LEGACY_URIS,
   VERIFY_MCP_APP_MIME_TYPE,
   VERIFY_MCP_APP_URI,
   VERIFY_MCP_OUTPUT_SCHEMA,
@@ -188,20 +187,21 @@ describe("Purr Verify MCP App compatibility", () => {
     expect(resource?.contents[0].text).not.toContain("cdn.jsdelivr.net");
     expect(resource?.contents[0].text).not.toContain("@modelcontextprotocol/ext-apps");
     expect(resource?.contents[0].text).toContain("Purr Verify Workbench");
+    expect(resource?.contents[0].text).toContain("verify-workbench-v5");
     expect(resource?.contents[0].text).toContain("let expanded = false");
-    expect(resource?.contents[0].text).toContain("Raw payload is rendered on demand.");
+    expect(resource?.contents[0].text).toContain("browserPresentation");
+    expect(resource?.contents[0].text).toContain("Pursr and a Chrome-compatible browser are ready.");
+    expect(resource?.contents[0].text).toContain("raw.addEventListener(\"toggle\"");
     expect(resource?.contents[0].text).toContain("content-visibility: auto");
+    expect(resource?.contents[0].text).not.toContain("Raw payload is rendered on demand.");
     const widgetScript =
       resource?.contents[0].text.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? "";
     expect(widgetScript).not.toBe("");
     expect(() => new Script(widgetScript)).not.toThrow();
+    expect(resource?.contents[0]._meta.ui.prefersBorder).toBe(false);
     expect("csp" in (resource?.contents[0]._meta.ui ?? {})).toBe(false);
-    for (const legacyUri of VERIFY_MCP_APP_LEGACY_URIS) {
-      const legacy = readVerifyMcpAppResource(request, legacyUri);
-      expect(legacy?.contents[0].uri).toBe(legacyUri);
-      expect(legacy?.contents[0].mimeType).toBe(VERIFY_MCP_APP_MIME_TYPE);
-      expect(legacy?.contents[0].text).toContain("verify-workbench-v4");
-    }
+    expect(readVerifyMcpAppResource(request, "ui://purr/verify-workbench-v4.html")).toBeNull();
+    expect(readVerifyMcpAppResource(request, "ui://purr/verify-workbench-v3.html")).toBeNull();
     expect(readVerifyMcpAppResource(request, "ui://missing")).toBeNull();
   });
 });
