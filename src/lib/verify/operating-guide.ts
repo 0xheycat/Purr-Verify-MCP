@@ -1,11 +1,11 @@
 export const VERIFY_MCP_INSTRUCTIONS =
-  "Before verification or local VPS operator work, call read_operating_guide and health_check. Use the purr discovery, inspection, environment, and deployment-plan tools for read-only local project work. Use server-owned aliases and profiles when runtime values are needed. Call list_allowed_commands before repository-clone verification. Use mode=auto or async for install/build/lint/typecheck/test. Long-running sync requests are routed to async instead of rejected. Timeout overrides automatically opt into long-run handling up to the operator timeout cap. Read effectiveMode from the response and poll get_verification_job when it is async. Use history summaries and bounded log chunks by default while preserving full evidence access.";
+  "Before verification, browser work, or local VPS operator work, call read_operating_guide and health_check. Use purr_browser_doctor before the first browser session. Use purr_work_session_start to pair a managed dev server with Pursr inspect-act-screenshot-diagnostics tools, and always close the session when finished. Use the purr discovery, inspection, environment, and deployment-plan tools for local project work. Use server-owned aliases and profiles when runtime values are needed. Call list_allowed_commands before repository-clone verification. Use mode=auto or async for install/build/lint/typecheck/test. Long-running sync requests are routed to async instead of rejected. Timeout overrides automatically opt into long-run handling up to the operator timeout cap. Read effectiveMode from the response and poll get_verification_job when it is async. Use history summaries and bounded log chunks by default while preserving full evidence access.";
 
 export const VERIFY_OPERATING_GUIDE = {
   name: "Purr Verify MCP Operating Guide",
-  version: "2026-07-17-operator-phase2",
+  version: "2026-07-20-pursr-browser-work-v1",
   serverRole:
-    "Use this MCP for repository-clone verification plus private VPS project discovery, inspection, generic local command execution, exact-tree verification, snapshots, deployment, service restart, health checks, and rollback. Operator mutations run as durable asynchronous jobs. GitHub MCP remains responsible for branches, commits, pull requests, and source-file edits.",
+    "Use this MCP for repository-clone verification, managed local dev-server and Pursr browser work sessions, plus private VPS project discovery, inspection, generic local command execution, exact-tree verification, snapshots, deployment, service restart, health checks, and rollback. Operator mutations run as durable asynchronous jobs; browser work sessions are explicit live sessions with bounded logs and server-side artifacts. GitHub MCP remains responsible for branches, commits, pull requests, and source-file edits.",
   startupProtocol: [
     "Call read_operating_guide first.",
     "Call health_check to confirm runtime, queue, effective timeout policy, durable history status, and auth mode.",
@@ -13,6 +13,9 @@ export const VERIFY_OPERATING_GUIDE = {
     "Inspect environment key presence first; reveal only explicitly requested keys when a value is genuinely required.",
     "Call purr_plan_deployment before future deployment mutations. Phase one returns a plan only.",
     "Use purr_run_command as the generic private escape hatch; argv is preferred and shell execution remains available explicitly.",
+    "Call purr_browser_doctor before the first browser workflow to verify Pursr, playwright-core, and a Chrome-compatible executable.",
+    "Use purr_work_session_start for npm run dev or equivalent, then use snapshot, act, screenshot, inspect, and diagnostics against the same persistent Pursr browser state.",
+    "Use purr_work_session_close when browser work is complete so the browser and managed dev-server process tree are closed cleanly.",
     "Use purr_verify_project to verify the exact local VPS working tree without cloning a disposable workspace.",
     "Use purr_deploy_project with approved=true for snapshot, activation, install, verify, build, restart, health checks, and optional automatic rollback in one durable asynchronous job.",
     "Use purr_get_job_status, purr_get_job_logs, and purr_cancel_job for every local operator job.",
@@ -32,6 +35,9 @@ export const VERIFY_OPERATING_GUIDE = {
     "Queued and running jobs are never removed by history retention. Their durable state remains readable until they reach a terminal result, including cancellation and cleanup evidence.",
     "History summaries and log chunks protect agent context; they do not remove access to full stored job evidence.",
     "Private operator commands, local verification, snapshots, deploys, restarts, health checks, and rollbacks run as durable asynchronous jobs against canonical local project paths.",
+    "Browser work reuses the Pursr npm package as the browser engine. Do not duplicate its session, action, screenshot, diagnostics, or browser-discovery implementations inside Verify MCP.",
+    "A missing browser degrades a work session to a usable dev-server session with an actionable warning unless browserRequired=true was explicitly requested.",
+    "Browser actions may have external side effects. Inspect current state first and keep action batches small enough to read back the result.",
     "Same-project operations are serialized by canonical cwd while unrelated projects may execute concurrently within the shared job limit.",
     "Environment inspection returns key names, source locations, and present or missing state by default. Revealing a value requires explicit requested keys and that response is not stored in history or deployment plans.",
     "Canonical cwd is the project identity for plans and future same-project operation locks; requested and symlink paths remain visible for auditability.",
@@ -69,7 +75,7 @@ export const VERIFY_OPERATING_GUIDE = {
     logAccess: "bounded_chunks_and_search",
   },
   operatorInspection: {
-    phase: "read_only_discovery_inspection_and_planning",
+    phase: "private_operator_and_pursr_browser_work",
     defaultRoots: ["/opt", "/srv", "/var/www", "/home", "/root", "/mnt", "/data", "/var/lib", "/usr/local", "/workspace", "/tmp"],
     customRootsEnvironment: "PURR_OPERATOR_ROOTS",
     projectIdentity: "canonical_absolute_cwd",
@@ -109,6 +115,16 @@ export const VERIFY_OPERATING_GUIDE = {
       "purr_get_job_status",
       "purr_get_job_logs",
       "purr_cancel_job",
+      "purr_browser_doctor",
+      "purr_work_session_start",
+      "purr_work_sessions",
+      "purr_work_session_status",
+      "purr_work_session_snapshot",
+      "purr_work_session_act",
+      "purr_work_session_screenshot",
+      "purr_work_session_inspect",
+      "purr_work_session_diagnostics",
+      "purr_work_session_close",
     ],
     githubMcp: ["repository inspection", "branch", "commit", "pull request", "file operations"],
     notion: ["specs", "plans", "audit notes", "project context"],

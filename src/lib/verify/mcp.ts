@@ -20,6 +20,7 @@ import { runnerTools } from "./system-tools";
 import { HISTORY_MCP_TOOLS, handleHistoryMcpTool } from "./history-mcp";
 import { OPERATOR_MCP_TOOLS, handleOperatorMcpTool } from "./operator-mcp";
 import { OPERATOR_MUTATION_MCP_TOOLS } from "./operator-mutation-mcp";
+import { BROWSER_WORK_MCP_TOOLS, handleBrowserWorkMcpTool } from "./browser-work-mcp";
 import {
   createShareToken,
   listShareTokensForJob,
@@ -56,6 +57,7 @@ export const VERIFY_MCP_TOOLS: ToolDef[] = [
   ...HISTORY_MCP_TOOLS,
   ...OPERATOR_MCP_TOOLS,
   ...OPERATOR_MUTATION_MCP_TOOLS,
+  ...BROWSER_WORK_MCP_TOOLS,
   {
     name: "create_verification_job",
     description:
@@ -283,6 +285,13 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
           return rpcResult(rid, {
             content: [toText(historyResult.payload)],
             isError: historyResult.isError === true,
+          });
+        }
+        const browserWorkResult = await handleBrowserWorkMcpTool(name, args);
+        if (browserWorkResult.handled) {
+          return rpcResult(rid, {
+            content: browserWorkResult.content ?? [toText(browserWorkResult.payload)],
+            isError: browserWorkResult.isError === true,
           });
         }
         const operatorResult = await handleOperatorMcpTool(name, args);

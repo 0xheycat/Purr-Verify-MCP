@@ -29,6 +29,8 @@ It is built for a private single-owner setup where the tool should remove fricti
 - REST API for health, job creation, job status, streaming, sharing, and cancellation.
 - Fresh repository verification from `https://github.com/<owner>/<repo>.git`.
 - Exact local project inspection and verification on the VPS.
+- Managed `npm run dev`-style work sessions paired with persistent Pursr browser state.
+- Browser snapshots, actions, direct-to-model PNG evidence, element inspection, diagnostics, and optional WebM recording.
 - Project discovery across common private VPS roots.
 - Runtime inspection for PM2, systemd, Docker Compose, and matching processes.
 - Environment inventory from dotenv, PM2, systemd, Compose, and process env.
@@ -54,6 +56,9 @@ flowchart LR
   Router --> Local[Local VPS project]
   Clone --> Runner[Command runner]
   Local --> Operator[Operator jobs]
+  Local --> Work[Managed dev server]
+  Work --> Pursr[Pursr browser session]
+  Pursr --> Artifacts[PNG / WebM / diagnostics]
   Runner --> History[Redacted durable history]
   Operator --> History
   Profiles[Server env aliases and profiles] --> Runner
@@ -140,8 +145,9 @@ Private operator defaults are intentionally broad. You can still narrow them wit
 Use aliases when a job needs a secret or private runtime value but the client should not send the value.
 
 ```bash
-VERIFY_SERVER_ENV_REF_ALLOWLIST=runtime_api_key=VERIFY_RUNTIME_API_KEY,runtime_rpc_url=VERIFY_RUNTIME_RPC_URL
-VERIFY_RUNTIME_API_KEY=
+# Format: <alias>=<server environment key>, comma-separated
+VERIFY_SERVER_ENV_REF_ALLOWLIST=runtime_credential=VERIFY_RUNTIME_CREDENTIAL,runtime_rpc_url=VERIFY_RUNTIME_RPC_URL
+VERIFY_RUNTIME_CREDENTIAL=
 VERIFY_RUNTIME_RPC_URL=
 ```
 
@@ -213,6 +219,7 @@ High-level groups:
 | Sharing | `create_share_link`, `list_share_links`, `revoke_share_links` |
 | Private project inspection | `purr_discover_projects`, `purr_inspect_project`, `purr_inspect_runtime`, `purr_inspect_environment`, `purr_plan_deployment` |
 | Private operator jobs | `purr_run_command`, `purr_verify_project`, `purr_create_deploy_snapshot`, `purr_deploy_project`, `purr_restart_service`, `purr_check_health`, `purr_rollback_deployment`, `purr_get_job_status`, `purr_get_job_logs`, `purr_cancel_job` |
+| Pursr browser work | `purr_browser_doctor`, `purr_work_session_start`, `purr_work_sessions`, `purr_work_session_status`, `purr_work_session_snapshot`, `purr_work_session_act`, `purr_work_session_screenshot`, `purr_work_session_inspect`, `purr_work_session_diagnostics`, `purr_work_session_close` |
 | Server env discovery | `purr_list_server_env_aliases`, `purr_list_server_env_profiles` |
 
 ---
@@ -269,6 +276,45 @@ Timeout overrides automatically opt into long-run handling. You do not need to r
 
 ---
 
+## Example: Browser Work Session
+
+First inspect browser readiness:
+
+```text
+purr_browser_doctor
+```
+
+Then start the project's real dev command and attach Pursr:
+
+```json
+{
+  "cwd": "/opt/Heycatlab",
+  "sessionId": "heycatlab-ui",
+  "argv": ["npm", "run", "dev"],
+  "port": 3000,
+  "browserMode": "headless",
+  "browserRequired": false
+}
+```
+
+Use the returned `sessionId` with snapshot, act, screenshot, inspect, and diagnostics tools. `purr_work_session_screenshot` returns PNG image content directly to the model and retains the server-side artifact path. Close the session when finished:
+
+```json
+{ "sessionId": "heycatlab-ui" }
+```
+
+Pursr owns browser discovery and the browser-agent implementation. Verify MCP only manages the project process, lifecycle, evidence routing, and ChatGPT-facing tools. When Chrome is missing, the default is a usable dev-server-only session with an actionable warning; set `browserRequired=true` only when the workflow cannot proceed without browser attachment.
+
+Server setup:
+
+```bash
+# Optional when automatic discovery does not find the preferred browser.
+PURSR_BROWSER_PATH=/usr/bin/chromium
+PURR_WORK_SESSION_STARTUP_TIMEOUT_MS=120000
+```
+
+---
+
 ## Private Operator Defaults
 
 Current private-friendly defaults:
@@ -306,6 +352,8 @@ Still enforced:
 - Profile contents, source env keys, and resolved values are not exposed by discovery.
 - Loader-sensitive env keys are reserved: `PATH`, `NODE_PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES`.
 - Destructive command classes require explicit confirmation.
+- Browser actions remain explicit MCP calls and are marked as potentially side-effecting; current state can be read back through snapshot, screenshot, and diagnostics.
+- Browser absence degrades gracefully by default instead of stopping a usable dev server.
 - Workspaces and job caches are disposable after terminal execution.
 - OAuth refresh credentials are stored as hashes and rotate on use.
 
@@ -414,6 +462,8 @@ src/lib/verify/operator-mutation-mcp.ts    Private operator mutation tools
 src/lib/verify/server-env-ref.ts           Server env aliases and profiles
 src/lib/verify/executor.ts                 Fresh clone verification runner
 src/lib/verify/operator-executor.ts        Local VPS operator job runner
+src/lib/verify/browser-work.ts             Managed dev server + Pursr session lifecycle
+src/lib/verify/browser-work-mcp.ts         ChatGPT-facing browser work tools and image results
 src/lib/verify/history-db.ts               SQLite WAL durable history
 src/lib/verify/oauth-server.ts             OAuth authorization and token exchange
 src/lib/verify/oauth-state.ts              JSON / Prisma OAuth state backends
