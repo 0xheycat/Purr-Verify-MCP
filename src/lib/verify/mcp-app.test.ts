@@ -84,7 +84,7 @@ describe("Purr Verify MCP App compatibility", () => {
 
     decorateVerifyMcpToolsList(packet);
 
-    expect(new Set(packet.result.tools.map((tool) => tool.name)).size).toBe(36);
+    expect(new Set(packet.result.tools.map((tool) => tool.name)).size).toBe(46);
     const templateUris = new Set<string>();
     for (const tool of packet.result.tools) {
       expect(tool.outputSchema).toEqual(VERIFY_MCP_OUTPUT_SCHEMA);

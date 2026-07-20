@@ -1,6 +1,6 @@
 # Private Developer Operations
 
-Purr Verify MCP supports private developer operations without reducing the existing verification surface. Phase one is read-only and adds project discovery, inspection, environment inventory, and deployment planning.
+Purr Verify MCP supports private developer operations without reducing the existing verification surface. Project discovery, inspection, environment inventory, deployment planning, durable operator jobs, and managed Pursr browser work sessions share the same private control plane.
 
 ## Phase-one tools
 
@@ -32,4 +32,18 @@ Supported sources are dotenv files, PM2, systemd, Docker Compose, and matching p
 
 `purr_plan_deployment` creates a plan but performs no mutation. The plan includes canonical project identity, Git state, package manager, monorepo state, suggested install/verify/build commands, detected service manager, environment gaps, health checks, snapshot fields, rollback strategy, risk classification, and a deterministic same-project lock key.
 
-Later phases will reuse the existing durable job engine for generic commands, snapshots, deploy, restart, health checks, rollback, cancellation, and logs. Existing Verify tools and the nine-hour long-run capability remain available.
+The existing durable job engine is reused for generic commands, snapshots, deploy, restart, health checks, rollback, cancellation, and logs. Existing Verify tools and long-run capability remain available.
+
+## Pursr browser work sessions
+
+Verify MCP integrates the published `pursr` npm package as a capability provider rather than rebuilding browser automation internally.
+
+- `purr_browser_doctor` reports the Pursr version, `playwright-core` resolution, browser discovery, setup hints, and active work sessions.
+- `purr_work_session_start` starts the project's real dev command, waits for HTTP readiness, and attaches a persistent Pursr session.
+- Snapshot, act, screenshot, inspect, and diagnostics calls reuse that same browser state.
+- Screenshots are returned as MCP image content and retained under the Verify data directory.
+- `purr_work_session_close` closes the browser and terminates the managed dev-server process tree.
+
+A missing Chrome-compatible browser is a recoverable setup condition. The default behavior keeps the dev server available and returns a warning; callers may opt into `browserRequired=true` when browser attachment is mandatory. Browser discovery honors `PURSR_BROWSER_PATH`, while startup readiness can be adjusted with `PURR_WORK_SESSION_STARTUP_TIMEOUT_MS`.
+
+Browser work sessions are live process-local sessions, not durable verification jobs. Their artifacts remain on disk, but active browser state is intentionally not claimed to survive a Verify MCP service restart.
