@@ -7,8 +7,18 @@
 
 import type { NextRequest } from "next/server";
 
-export const VERIFY_MCP_APP_URI = "ui://purr/verify-workbench-v3.html";
+export const VERIFY_MCP_APP_URI = "ui://purr/verify-workbench-v4.html";
+export const VERIFY_MCP_APP_LEGACY_URIS = Object.freeze([
+  "ui://purr/verify-workbench.html",
+  "ui://purr/verify-workbench-v2.html",
+  "ui://purr/verify-workbench-v3.html",
+]);
 export const VERIFY_MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
+
+const VERIFY_MCP_APP_READABLE_URIS = new Set([
+  VERIFY_MCP_APP_URI,
+  ...VERIFY_MCP_APP_LEGACY_URIS,
+]);
 export const VERIFY_MCP_OUTPUT_SCHEMA = Object.freeze({
   type: "object",
   additionalProperties: false,
@@ -80,11 +90,11 @@ export function listVerifyMcpAppResources() {
 }
 
 export function readVerifyMcpAppResource(_req: NextRequest, uri: string) {
-  if (uri !== VERIFY_MCP_APP_URI) return null;
+  if (!VERIFY_MCP_APP_READABLE_URIS.has(uri)) return null;
   return {
     contents: [
       {
-        uri: VERIFY_MCP_APP_URI,
+        uri,
         mimeType: VERIFY_MCP_APP_MIME_TYPE,
         text: verifyMcpAppHtml(),
         _meta: {
@@ -226,6 +236,7 @@ function verifyMcpAppHtml(): string {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="mcp-app-template" content="${VERIFY_MCP_APP_URI}" />
     <title>Purr Verify Workbench</title>
     <style>
       :root {
@@ -249,7 +260,9 @@ function verifyMcpAppHtml(): string {
         border: 1px solid var(--border);
         border-radius: 14px;
         background: var(--card);
-        box-shadow: 0 10px 30px color-mix(in srgb, CanvasText 7%, transparent);
+        contain: layout paint style;
+        content-visibility: auto;
+        contain-intrinsic-size: 72px;
       }
       .header {
         width: 100%;
@@ -299,6 +312,16 @@ function verifyMcpAppHtml(): string {
       .status.running { border-color: color-mix(in srgb, var(--run) 60%, var(--border)); }
       .status.failed { border-color: color-mix(in srgb, var(--bad) 60%, var(--border)); }
       .body { border-top: 1px solid var(--border); padding: 12px 14px 14px; }
+      .actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+      .details-toggle {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 6px 9px;
+        background: transparent;
+        cursor: pointer;
+        font: 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      .hint { color: var(--muted); font-size: 11px; }
       .metrics { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 10px; }
       .metric {
         border: 1px solid var(--border);
@@ -332,7 +355,8 @@ function verifyMcpAppHtml(): string {
     <main id="app" class="shell"><section class="empty">Connecting to Purr Verify…</section></main>
     <script>
       const root = document.querySelector("#app");
-      let expanded = true;
+      let expanded = false;
+      let detailsOpen = false;
       let card = normalizeResult(
         window.openai?.toolOutput,
         window.openai?.toolResponseMetadata
@@ -402,7 +426,11 @@ function verifyMcpAppHtml(): string {
         const header = node("button", "header");
         header.type = "button";
         header.setAttribute("aria-expanded", String(expanded));
-        header.addEventListener("click", () => { expanded = !expanded; render(); });
+        header.addEventListener("click", () => {
+          expanded = !expanded;
+          if (!expanded) detailsOpen = false;
+          render();
+        });
 
         const icon = node("span", "icon", display.icon);
         const main = node("span", "main");
@@ -420,7 +448,18 @@ function verifyMcpAppHtml(): string {
             for (const item of metrics) row.append(node("span", "metric", item));
             body.append(row);
           }
-          body.append(node("pre", "", pretty(card.payload)));
+          const actions = node("div", "actions");
+          const details = node("button", "details-toggle", detailsOpen ? "Hide details" : "Show details");
+          details.type = "button";
+          details.setAttribute("aria-expanded", String(detailsOpen));
+          details.addEventListener("click", (event) => {
+            event.stopPropagation();
+            detailsOpen = !detailsOpen;
+            render();
+          });
+          actions.append(details, node("span", "hint", "Raw payload is rendered on demand."));
+          body.append(actions);
+          if (detailsOpen) body.append(node("pre", "", pretty(card.payload)));
           section.append(body);
         }
         root.replaceChildren(section);
@@ -504,11 +543,17 @@ function verifyMcpAppHtml(): string {
         return output;
       }
 
-      function walk(value, depth, visit) {
-        if (depth > 4 || !value || typeof value !== "object") return;
-        for (const [key, child] of Object.entries(value)) {
+      function walk(value, depth, visit, state = { nodes: 0, seen: new WeakSet() }) {
+        if (depth > 3 || state.nodes >= 400 || !value || typeof value !== "object") return;
+        if (state.seen.has(value)) return;
+        state.seen.add(value);
+        for (const key in value) {
+          if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+          if (state.nodes >= 400) break;
+          const child = value[key];
+          state.nodes += 1;
           visit(key, child);
-          if (child && typeof child === "object") walk(child, depth + 1, visit);
+          if (child && typeof child === "object") walk(child, depth + 1, visit, state);
         }
       }
 
@@ -519,8 +564,43 @@ function verifyMcpAppHtml(): string {
       }
 
       function pretty(value) {
-        if (typeof value === "string") return value;
-        try { return JSON.stringify(value, null, 2); } catch { return String(value); }
+        if (typeof value === "string") return truncate(value, 65536);
+        try { return JSON.stringify(boundedPreview(value), null, 2); } catch { return String(value); }
+      }
+
+      function boundedPreview(value, depth = 0, state = { nodes: 0, seen: new WeakSet() }) {
+        if (typeof value === "string") return truncate(value, 4000);
+        if (value === null || typeof value !== "object") return value;
+        if (depth > 5 || state.nodes >= 1200) return "[Preview truncated]";
+        if (state.seen.has(value)) return "[Circular]";
+        state.seen.add(value);
+        if (Array.isArray(value)) {
+          const output = [];
+          const limit = Math.min(value.length, 50);
+          for (let index = 0; index < limit && state.nodes < 1200; index += 1) {
+            state.nodes += 1;
+            output.push(boundedPreview(value[index], depth + 1, state));
+          }
+          if (value.length > limit) output.push("[" + (value.length - limit) + " more items]");
+          return output;
+        }
+        const output = {};
+        let count = 0;
+        for (const key in value) {
+          if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+          if (count >= 80 || state.nodes >= 1200) {
+            output.__preview = "Additional fields omitted";
+            break;
+          }
+          count += 1;
+          state.nodes += 1;
+          output[key] = boundedPreview(value[key], depth + 1, state);
+        }
+        return output;
+      }
+
+      function truncate(value, limit) {
+        return value.length > limit ? value.slice(0, limit) + "\\n[Preview truncated]" : value;
       }
 
       function node(tag, className = "", text) {
