@@ -89,7 +89,7 @@ describe("Purr Verify MCP App compatibility", () => {
 
     decorateVerifyMcpToolsList(packet);
 
-    expect(new Set(packet.result.tools.map((tool) => tool.name)).size).toBe(46);
+    expect(new Set(packet.result.tools.map((tool) => tool.name)).size).toBe(47);
     const templateUris = new Set<string>();
     const renderTools = new Set<string>(VERIFY_MCP_APP_TOOL_NAMES);
     let uiBoundTools = 0;
@@ -107,6 +107,8 @@ describe("Purr Verify MCP App compatibility", () => {
       }
     }
     expect(uiBoundTools).toBe(VERIFY_MCP_APP_TOOL_NAMES.length);
+    const uploadTool = packet.result.tools.find((tool) => tool.name === "purr_upload_file");
+    expect(uploadTool?._meta).toEqual({ "openai/fileParams": ["file"] });
 
     const request = { url: "https://verify.example/mcp" } as NextRequest;
     expect([...templateUris]).toEqual([VERIFY_MCP_APP_URI]);

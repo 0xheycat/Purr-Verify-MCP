@@ -72,6 +72,7 @@ const TOOL_SCOPE: Record<string, string> = {
   purr_get_job_logs: "verify:read",
   list_share_links: "verify:read",
   purr_run_command: "verify:run",
+  purr_upload_file: "verify:run",
   purr_verify_project: "verify:run",
   purr_create_deploy_snapshot: "verify:run",
   purr_deploy_project: "verify:run",

@@ -29,6 +29,7 @@ It is built for a private single-owner setup where the tool should remove fricti
 - REST API for health, job creation, job status, streaming, sharing, and cancellation.
 - Fresh repository verification from `https://github.com/<owner>/<repo>.git`.
 - Exact local project inspection and verification on the VPS.
+- Opaque binary connector-file upload to absolute server paths with streaming SHA-256 verification and atomic replacement.
 - Managed `npm run dev`-style work sessions paired with persistent Pursr browser state.
 - Browser snapshots, actions, direct-to-model PNG evidence, element inspection, diagnostics, and optional WebM recording.
 - Project discovery across common private VPS roots.
@@ -56,6 +57,8 @@ flowchart LR
   Router --> Local[Local VPS project]
   Clone --> Runner[Command runner]
   Local --> Operator[Operator jobs]
+  Agent --> Upload[Connector file upload]
+  Upload --> Local
   Local --> Work[Managed dev server]
   Work --> Pursr[Pursr browser session]
   Pursr --> Artifacts[PNG / WebM / diagnostics]
@@ -219,6 +222,7 @@ High-level groups:
 | Sharing | `create_share_link`, `list_share_links`, `revoke_share_links` |
 | Private project inspection | `purr_discover_projects`, `purr_inspect_project`, `purr_inspect_runtime`, `purr_inspect_environment`, `purr_plan_deployment` |
 | Private operator jobs | `purr_run_command`, `purr_verify_project`, `purr_create_deploy_snapshot`, `purr_deploy_project`, `purr_restart_service`, `purr_check_health`, `purr_rollback_deployment`, `purr_get_job_status`, `purr_get_job_logs`, `purr_cancel_job` |
+| Binary file transfer | `purr_upload_file` |
 | Pursr browser work | `purr_browser_doctor`, `purr_work_session_start`, `purr_work_sessions`, `purr_work_session_status`, `purr_work_session_snapshot`, `purr_work_session_act`, `purr_work_session_screenshot`, `purr_work_session_inspect`, `purr_work_session_diagnostics`, `purr_work_session_close` |
 | Server env discovery | `purr_list_server_env_aliases`, `purr_list_server_env_profiles` |
 
@@ -273,6 +277,24 @@ For generic local commands, prefer argv:
 ```
 
 Timeout overrides automatically opt into long-run handling. You do not need to remember a separate flag.
+
+---
+
+## Example: Binary Connector File Upload
+
+Attach any file in ChatGPT, calculate or provide its expected SHA-256, then call:
+
+```json
+{
+  "file": "<local connector file>",
+  "destination": "/opt/example/artifacts/model.bin",
+  "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+}
+```
+
+`purr_upload_file` treats the input as opaque bytes. It does not restrict extension, MIME type, or file size at the application layer. The transfer is streamed with backpressure, parent directories are created, and an existing destination is atomically replaced only after the complete SHA-256 matches. A mismatch removes the temporary file and leaves the previous destination unchanged.
+
+The actual maximum transferable size is therefore determined by available disk space, filesystem support, connector availability, and surrounding network or platform infrastructure rather than a Verify MCP byte cap.
 
 ---
 
@@ -352,6 +374,8 @@ Still enforced:
 - Profile contents, source env keys, and resolved values are not exposed by discovery.
 - Loader-sensitive env keys are reserved: `PATH`, `NODE_PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES`.
 - Destructive command classes require explicit confirmation.
+- Binary upload requires a caller-supplied SHA-256 and uses a same-directory temporary file plus atomic rename; checksum failure never replaces the destination.
+- Binary upload does not apply extension, MIME, or application-level byte caps.
 - Browser actions remain explicit MCP calls and are marked as potentially side-effecting; current state can be read back through snapshot, screenshot, and diagnostics.
 - Browser absence degrades gracefully by default instead of stopping a usable dev server.
 - Workspaces and job caches are disposable after terminal execution.
@@ -464,6 +488,7 @@ src/lib/verify/executor.ts                 Fresh clone verification runner
 src/lib/verify/operator-executor.ts        Local VPS operator job runner
 src/lib/verify/browser-work.ts             Managed dev server + Pursr session lifecycle
 src/lib/verify/browser-work-mcp.ts         ChatGPT-facing browser work tools and image results
+src/lib/verify/file-upload-mcp.ts          Streaming connector-file upload and atomic SHA-256-verified replacement
 src/lib/verify/history-db.ts               SQLite WAL durable history
 src/lib/verify/oauth-server.ts             OAuth authorization and token exchange
 src/lib/verify/oauth-state.ts              JSON / Prisma OAuth state backends

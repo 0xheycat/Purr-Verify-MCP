@@ -21,6 +21,7 @@ import { HISTORY_MCP_TOOLS, handleHistoryMcpTool } from "./history-mcp";
 import { OPERATOR_MCP_TOOLS, handleOperatorMcpTool } from "./operator-mcp";
 import { OPERATOR_MUTATION_MCP_TOOLS } from "./operator-mutation-mcp";
 import { BROWSER_WORK_MCP_TOOLS, handleBrowserWorkMcpTool } from "./browser-work-mcp";
+import { FILE_UPLOAD_MCP_TOOLS, handleFileUploadMcpTool } from "./file-upload-mcp";
 import {
   createShareToken,
   listShareTokensForJob,
@@ -51,6 +52,7 @@ export interface ToolDef {
     destructiveHint: boolean;
     idempotentHint: boolean;
   };
+  _meta?: Record<string, unknown>;
 }
 
 export const VERIFY_MCP_TOOLS: ToolDef[] = [
@@ -58,6 +60,7 @@ export const VERIFY_MCP_TOOLS: ToolDef[] = [
   ...OPERATOR_MCP_TOOLS,
   ...OPERATOR_MUTATION_MCP_TOOLS,
   ...BROWSER_WORK_MCP_TOOLS,
+  ...FILE_UPLOAD_MCP_TOOLS,
   {
     name: "create_verification_job",
     description:
@@ -266,6 +269,7 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
           description: t.description,
           inputSchema: t.inputSchema,
           annotations: t.annotations,
+          ...(t._meta ? { _meta: t._meta } : {}),
         })),
       });
     }
@@ -292,6 +296,13 @@ export async function handleMcp(req: NextRequest): Promise<NextResponse> {
           return rpcResult(rid, {
             content: browserWorkResult.content ?? [toText(browserWorkResult.payload)],
             isError: browserWorkResult.isError === true,
+          });
+        }
+        const fileUploadResult = await handleFileUploadMcpTool(name, args);
+        if (fileUploadResult.handled) {
+          return rpcResult(rid, {
+            content: [toText(fileUploadResult.payload)],
+            isError: fileUploadResult.isError === true,
           });
         }
         const operatorResult = await handleOperatorMcpTool(name, args);

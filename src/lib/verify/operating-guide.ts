@@ -1,11 +1,11 @@
 export const VERIFY_MCP_INSTRUCTIONS =
-  "Before verification, browser work, or local VPS operator work, call read_operating_guide and health_check. Use purr_browser_doctor before the first browser session. Use purr_work_session_start to pair a managed dev server with Pursr inspect-act-screenshot-diagnostics tools, and always close the session when finished. Use the purr discovery, inspection, environment, and deployment-plan tools for local project work. Use server-owned aliases and profiles when runtime values are needed. Call list_allowed_commands before repository-clone verification. Use mode=auto or async for install/build/lint/typecheck/test. Long-running sync requests are routed to async instead of rejected. Timeout overrides automatically opt into long-run handling up to the operator timeout cap. Read effectiveMode from the response and poll get_verification_job when it is async. Use history summaries and bounded log chunks by default while preserving full evidence access.";
+  "Before verification, browser work, binary file upload, or local VPS operator work, call read_operating_guide and health_check. Use purr_upload_file for opaque connector-file transfer with an absolute destination and required SHA-256; uploads stream without file-format or application-level byte caps and replace atomically only after checksum verification. Use purr_browser_doctor before the first browser session. Use purr_work_session_start to pair a managed dev server with Pursr inspect-act-screenshot-diagnostics tools, and always close the session when finished. Use the purr discovery, inspection, environment, and deployment-plan tools for local project work. Use server-owned aliases and profiles when runtime values are needed. Call list_allowed_commands before repository-clone verification. Use mode=auto or async for install/build/lint/typecheck/test. Long-running sync requests are routed to async instead of rejected. Timeout overrides automatically opt into long-run handling up to the operator timeout cap. Read effectiveMode from the response and poll get_verification_job when it is async. Use history summaries and bounded log chunks by default while preserving full evidence access.";
 
 export const VERIFY_OPERATING_GUIDE = {
   name: "Purr Verify MCP Operating Guide",
-  version: "2026-07-20-pursr-browser-work-v1",
+  version: "2026-07-22-binary-file-upload-v1",
   serverRole:
-    "Use this MCP for repository-clone verification, managed local dev-server and Pursr browser work sessions, plus private VPS project discovery, inspection, generic local command execution, exact-tree verification, snapshots, deployment, service restart, health checks, and rollback. Operator mutations run as durable asynchronous jobs; browser work sessions are explicit live sessions with bounded logs and server-side artifacts. GitHub MCP remains responsible for branches, commits, pull requests, and source-file edits.",
+    "Use this MCP for repository-clone verification, opaque binary connector-file upload, managed local dev-server and Pursr browser work sessions, plus private VPS project discovery, inspection, generic local command execution, exact-tree verification, snapshots, deployment, service restart, health checks, and rollback. Binary uploads stream directly to an atomic destination replacement after SHA-256 verification. Operator mutations run as durable asynchronous jobs; browser work sessions are explicit live sessions with bounded logs and server-side artifacts. GitHub MCP remains responsible for branches, commits, pull requests, and source-file edits.",
   startupProtocol: [
     "Call read_operating_guide first.",
     "Call health_check to confirm runtime, queue, effective timeout policy, durable history status, and auth mode.",
@@ -13,6 +13,7 @@ export const VERIFY_OPERATING_GUIDE = {
     "Inspect environment key presence first; reveal only explicitly requested keys when a value is genuinely required.",
     "Call purr_plan_deployment before future deployment mutations. Phase one returns a plan only.",
     "Use purr_run_command as the generic private escape hatch; argv is preferred and shell execution remains available explicitly.",
+    "Use purr_upload_file for a ChatGPT connector file, absolute destination path, and expected SHA-256. The tool accepts opaque bytes of any format, streams without an application-level size cap, creates parent directories, and atomically replaces an existing destination only after checksum verification.",
     "Call purr_browser_doctor before the first browser workflow to verify Pursr, playwright-core, and a Chrome-compatible executable.",
     "Use purr_work_session_start for npm run dev or equivalent, then use snapshot, act, screenshot, inspect, and diagnostics against the same persistent Pursr browser state.",
     "Use purr_work_session_close when browser work is complete so the browser and managed dev-server process tree are closed cleanly.",
@@ -35,6 +36,7 @@ export const VERIFY_OPERATING_GUIDE = {
     "Queued and running jobs are never removed by history retention. Their durable state remains readable until they reach a terminal result, including cancellation and cleanup evidence.",
     "History summaries and log chunks protect agent context; they do not remove access to full stored job evidence.",
     "Private operator commands, local verification, snapshots, deploys, restarts, health checks, and rollbacks run as durable asynchronous jobs against canonical local project paths.",
+    "Binary upload treats file content as opaque bytes: no extension whitelist, MIME whitelist, or application-level byte cap is applied. SHA-256 verification is mandatory and a mismatch leaves the previous destination unchanged.",
     "Browser work reuses the Pursr npm package as the browser engine. Do not duplicate its session, action, screenshot, diagnostics, or browser-discovery implementations inside Verify MCP.",
     "A missing browser degrades a work session to a usable dev-server session with an actionable warning unless browserRequired=true was explicitly requested.",
     "Browser actions may have external side effects. Inspect current state first and keep action batches small enough to read back the result.",
@@ -75,7 +77,7 @@ export const VERIFY_OPERATING_GUIDE = {
     logAccess: "bounded_chunks_and_search",
   },
   operatorInspection: {
-    phase: "private_operator_and_pursr_browser_work",
+    phase: "private_operator_binary_upload_and_pursr_browser_work",
     defaultRoots: ["/opt", "/srv", "/var/www", "/home", "/root", "/mnt", "/data", "/var/lib", "/usr/local", "/workspace", "/tmp"],
     customRootsEnvironment: "PURR_OPERATOR_ROOTS",
     projectIdentity: "canonical_absolute_cwd",
@@ -106,6 +108,7 @@ export const VERIFY_OPERATING_GUIDE = {
       "purr_inspect_environment",
       "purr_plan_deployment",
       "purr_run_command",
+      "purr_upload_file",
       "purr_verify_project",
       "purr_create_deploy_snapshot",
       "purr_deploy_project",
