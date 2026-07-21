@@ -9,14 +9,6 @@
 import type { NextRequest } from "next/server";
 
 export const VERIFY_MCP_APP_URI = "ui://purr/verify-workbench-v8.html";
-export const VERIFY_MCP_APP_LEGACY_URIS = Object.freeze([
-  "ui://purr/verify-workbench.html",
-  "ui://purr/verify-workbench-v3.html",
-  "ui://purr/verify-workbench-v4.html",
-  "ui://purr/verify-workbench-v5.html",
-  "ui://purr/verify-workbench-v6.html",
-  "ui://purr/verify-workbench-v7.html",
-]);
 export const VERIFY_MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 
 export const VERIFY_MCP_APP_TOOL_NAMES = Object.freeze([
@@ -28,11 +20,6 @@ export const VERIFY_MCP_APP_TOOL_NAMES = Object.freeze([
 ]);
 
 const VERIFY_MCP_APP_TOOLS = new Set<string>(VERIFY_MCP_APP_TOOL_NAMES);
-
-const VERIFY_MCP_APP_READABLE_URIS = new Set([
-  VERIFY_MCP_APP_URI,
-  ...VERIFY_MCP_APP_LEGACY_URIS,
-]);
 
 export const VERIFY_MCP_OUTPUT_SCHEMA = Object.freeze({
   type: "object",
@@ -103,7 +90,7 @@ export function listVerifyMcpAppResources() {
 }
 
 export function readVerifyMcpAppResource(_req: NextRequest, uri: string) {
-  if (!VERIFY_MCP_APP_READABLE_URIS.has(uri)) return null;
+  if (uri !== VERIFY_MCP_APP_URI) return null;
   return {
     contents: [
       {
