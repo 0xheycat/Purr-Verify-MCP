@@ -6,7 +6,9 @@ import { VERIFY_DEBUG_TOOLS } from "./debug";
 import { VERIFY_MCP_TOOLS } from "./mcp";
 import { READ_OPERATING_GUIDE_TOOL } from "./operating-guide";
 import {
+  VERIFY_MCP_APP_LEGACY_URIS,
   VERIFY_MCP_APP_MIME_TYPE,
+  VERIFY_MCP_APP_TOOL_NAMES,
   VERIFY_MCP_APP_URI,
   VERIFY_MCP_OUTPUT_SCHEMA,
   decorateVerifyMcpInitialize,
@@ -36,7 +38,7 @@ describe("Purr Verify MCP App compatibility", () => {
     });
   });
 
-  test("attaches the shared workbench to every visible tool", () => {
+  test("attaches the shared workbench only to render tools", () => {
     const packet: {
       jsonrpc: string;
       id: number;
@@ -46,7 +48,7 @@ describe("Purr Verify MCP App compatibility", () => {
       id: 2,
       result: {
         tools: [
-          { name: "health_check", inputSchema: { type: "object" } },
+          { name: "purr_check_health", inputSchema: { type: "object" } },
           { name: "read_operating_guide", inputSchema: { type: "object" } },
         ],
       },
@@ -60,10 +62,14 @@ describe("Purr Verify MCP App compatibility", () => {
       ui: { resourceUri: VERIFY_MCP_APP_URI, visibility: ["model"] },
       "openai/outputTemplate": VERIFY_MCP_APP_URI,
     });
-    expect(packet.result.tools[1]._meta).toEqual({
-      ui: { resourceUri: VERIFY_MCP_APP_URI, visibility: ["model"] },
-      "openai/outputTemplate": VERIFY_MCP_APP_URI,
-    });
+    expect(packet.result.tools[1]._meta).toBeUndefined();
+    expect(VERIFY_MCP_APP_TOOL_NAMES).toEqual([
+      "get_verification_summary",
+      "get_latest_verification",
+      "compare_verification_jobs",
+      "purr_plan_deployment",
+      "purr_check_health",
+    ]);
   });
 
   test("covers the complete live catalog with one readable template", () => {
@@ -86,13 +92,22 @@ describe("Purr Verify MCP App compatibility", () => {
 
     expect(new Set(packet.result.tools.map((tool) => tool.name)).size).toBe(46);
     const templateUris = new Set<string>();
+    const renderTools = new Set<string>(VERIFY_MCP_APP_TOOL_NAMES);
+    let uiBoundTools = 0;
     for (const tool of packet.result.tools) {
       expect(tool.outputSchema).toEqual(VERIFY_MCP_OUTPUT_SCHEMA);
-      const meta = tool._meta as Record<string, unknown>;
-      expect(meta["openai/outputTemplate"]).toBe(VERIFY_MCP_APP_URI);
-      expect(meta.ui).toEqual({ resourceUri: VERIFY_MCP_APP_URI, visibility: ["model"] });
-      templateUris.add(String(meta["openai/outputTemplate"]));
+      const meta = tool._meta as Record<string, unknown> | undefined;
+      if (renderTools.has(String(tool.name))) {
+        expect(meta?.["openai/outputTemplate"]).toBe(VERIFY_MCP_APP_URI);
+        expect(meta?.ui).toEqual({ resourceUri: VERIFY_MCP_APP_URI, visibility: ["model"] });
+        templateUris.add(String(meta?.["openai/outputTemplate"]));
+        uiBoundTools += 1;
+      } else {
+        expect(meta?.["openai/outputTemplate"]).toBeUndefined();
+        expect(meta?.ui).toBeUndefined();
+      }
     }
+    expect(uiBoundTools).toBe(VERIFY_MCP_APP_TOOL_NAMES.length);
 
     const request = { url: "https://verify.example/mcp" } as NextRequest;
     expect([...templateUris]).toEqual([VERIFY_MCP_APP_URI]);
@@ -212,13 +227,11 @@ describe("Purr Verify MCP App compatibility", () => {
     ).toEqual([]);
     expect(resource?.contents[0]._meta.ui.prefersBorder).toBe(false);
     expect("csp" in (resource?.contents[0]._meta.ui ?? {})).toBe(false);
-    expect(
-      readVerifyMcpAppResource(request, "ui://purr/verify-workbench-v7.html")?.contents[0].text,
-    ).toContain("verify-workbench-v8");
-    expect(readVerifyMcpAppResource(request, "ui://purr/verify-workbench-v6.html")).toBeNull();
-    expect(readVerifyMcpAppResource(request, "ui://purr/verify-workbench-v5.html")).toBeNull();
-    expect(readVerifyMcpAppResource(request, "ui://purr/verify-workbench-v4.html")).toBeNull();
-    expect(readVerifyMcpAppResource(request, "ui://purr/verify-workbench-v3.html")).toBeNull();
+    for (const legacyUri of VERIFY_MCP_APP_LEGACY_URIS) {
+      expect(readVerifyMcpAppResource(request, legacyUri)?.contents[0].text).toContain(
+        "verify-workbench-v8",
+      );
+    }
     expect(readVerifyMcpAppResource(request, "ui://missing")).toBeNull();
   });
 });
