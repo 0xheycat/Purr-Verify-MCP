@@ -10,9 +10,24 @@ import type { NextRequest } from "next/server";
 
 export const VERIFY_MCP_APP_URI = "ui://purr/verify-workbench-v8.html";
 export const VERIFY_MCP_APP_LEGACY_URIS = Object.freeze([
+  "ui://purr/verify-workbench.html",
+  "ui://purr/verify-workbench-v3.html",
+  "ui://purr/verify-workbench-v4.html",
+  "ui://purr/verify-workbench-v5.html",
+  "ui://purr/verify-workbench-v6.html",
   "ui://purr/verify-workbench-v7.html",
 ]);
 export const VERIFY_MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
+
+export const VERIFY_MCP_APP_TOOL_NAMES = Object.freeze([
+  "get_verification_summary",
+  "get_latest_verification",
+  "compare_verification_jobs",
+  "purr_plan_deployment",
+  "purr_check_health",
+]);
+
+const VERIFY_MCP_APP_TOOLS = new Set<string>(VERIFY_MCP_APP_TOOL_NAMES);
 
 const VERIFY_MCP_APP_READABLE_URIS = new Set([
   VERIFY_MCP_APP_URI,
@@ -41,7 +56,7 @@ export interface VerifyMcpAppCard {
 }
 
 export function verifyMcpAppToolMeta(toolName: string): Record<string, unknown> | undefined {
-  if (!toolName) return undefined;
+  if (!toolName || !VERIFY_MCP_APP_TOOLS.has(toolName)) return undefined;
   return {
     ui: {
       resourceUri: VERIFY_MCP_APP_URI,
