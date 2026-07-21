@@ -6,7 +6,6 @@ import { VERIFY_DEBUG_TOOLS } from "./debug";
 import { VERIFY_MCP_TOOLS } from "./mcp";
 import { READ_OPERATING_GUIDE_TOOL } from "./operating-guide";
 import {
-  VERIFY_MCP_APP_LEGACY_URIS,
   VERIFY_MCP_APP_MIME_TYPE,
   VERIFY_MCP_APP_TOOL_NAMES,
   VERIFY_MCP_APP_URI,
@@ -227,11 +226,8 @@ describe("Purr Verify MCP App compatibility", () => {
     ).toEqual([]);
     expect(resource?.contents[0]._meta.ui.prefersBorder).toBe(false);
     expect("csp" in (resource?.contents[0]._meta.ui ?? {})).toBe(false);
-    for (const legacyUri of VERIFY_MCP_APP_LEGACY_URIS) {
-      expect(readVerifyMcpAppResource(request, legacyUri)?.contents[0].text).toContain(
-        "verify-workbench-v8",
-      );
-    }
+    expect(readVerifyMcpAppResource(request, "ui://purr/verify-workbench-v7.html")).toBeNull();
+    expect(readVerifyMcpAppResource(request, "ui://purr/verify-workbench.html")).toBeNull();
     expect(readVerifyMcpAppResource(request, "ui://missing")).toBeNull();
   });
 });
