@@ -500,3 +500,9 @@ src/lib/verify/operating-guide.ts          Agent-facing operating guide
 ## License
 
 MIT
+
+---
+
+## Keywords
+
+<sub>`purr-verify-mcp` · `mcp` · `model-context-protocol` · `mcp-server` · `verification` · `ci-cd` · `ai-agents` · `coding-agents` · `chatgpt-connector` · `codex` · `vps` · `devops` · `deployment` · `browser-qa` · `playwright` · `bun` · `nextjs` · `typescript` · `oauth` · `self-hosted` · `automation`</sub>
