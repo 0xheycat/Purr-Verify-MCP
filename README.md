@@ -14,6 +14,8 @@
   <img alt="language" src="https://img.shields.io/badge/language-TypeScript-3178c6" />
   <img alt="transport" src="https://img.shields.io/badge/transport-MCP%20%2B%20REST-6E56CF" />
   <img alt="mode" src="https://img.shields.io/badge/mode-private%20operator-0f766e" />
+  <a href="https://github.com/0xheycat/Purr-Verify-MCP/stargazers"><img alt="stars" src="https://img.shields.io/github/stars/0xheycat/Purr-Verify-MCP?logo=github&color=6E56CF" /></a>
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-0f766e" />
 </p>
 
 Purr Verify MCP gives agents a real runtime: fresh GitHub clone verification, exact local working-tree verification, private VPS project inspection, server-owned environment profiles, durable logs, and deployment-oriented operator jobs.
