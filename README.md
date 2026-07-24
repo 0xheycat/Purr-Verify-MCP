@@ -505,6 +505,19 @@ MIT
 
 ---
 
+## Contributing
+
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-6E56CF.svg)](CONTRIBUTING.md)
+[![good first issues](https://img.shields.io/github/issues/0xheycat/Purr-Verify-MCP/good%20first%20issue?label=good%20first%20issues&color=7057ff)](https://github.com/0xheycat/Purr-Verify-MCP/labels/good%20first%20issue)
+
+Contributions are welcome and appreciated! 🐾
+
+- 📖 Read the [Contributing guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md).
+- 🌱 New here? Look for [`good first issue`](https://github.com/0xheycat/Purr-Verify-MCP/labels/good%20first%20issue).
+- 💬 Ideas & questions → [Discussions](https://github.com/0xheycat/Purr-Verify-MCP/discussions).
+
+---
+
 ## Keywords
 
 <sub>`purr-verify-mcp` · `mcp` · `model-context-protocol` · `mcp-server` · `verification` · `ci-cd` · `ai-agents` · `coding-agents` · `chatgpt-connector` · `codex` · `vps` · `devops` · `deployment` · `browser-qa` · `playwright` · `bun` · `nextjs` · `typescript` · `oauth` · `self-hosted` · `automation`</sub>
