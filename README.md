@@ -296,11 +296,13 @@ Attach any file in ChatGPT, calculate or provide its expected SHA-256, then call
 }
 ```
 
-`purr_upload_file` treats the input as opaque bytes. It does not restrict extension, MIME type, or file size at the application layer. With `mode: "auto"`, ChatGPT connector downloads return immediately with a durable `jobId`; poll `purr_get_job_status`, inspect progress with `purr_get_job_logs`, or stop the transfer with `purr_cancel_job`. Mounted server-local files remain synchronous by default.
+`purr_upload_file` treats the input as opaque bytes. It does not restrict extension, MIME type, or file size at the application layer. With `mode: "auto"`, both ChatGPT connector downloads and mounted server-local files return immediately with a durable `jobId`; poll `purr_get_job_status`, inspect bounded progress with `purr_get_job_logs`, or stop the transfer with `purr_cancel_job`. Use `mode: "sync"` only for a deliberately short transfer.
 
-Identical retries for the same normalized destination and SHA-256 reuse one active upload job instead of starting duplicate streams. A different hash is rejected while that destination is owned. When the destination already contains the expected bytes, the tool verifies and reuses it without downloading again. Transfers use backpressure, create parent directories, remove stale same-destination upload temporaries, and atomically replace the destination only after the complete SHA-256 matches. A mismatch leaves the previous destination unchanged.
+Identical retries for the same normalized destination and SHA-256 reuse one active upload job instead of starting duplicate streams. Destination ownership is protected by an on-disk lock as well as the in-process map, so concurrent server processes cannot write the same path. A different hash is rejected while that destination is owned. Interrupted ownership is reclaimed as soon as the recorded process is gone or its durable job is terminal, without waiting for a fixed multi-hour timeout.
 
-The actual maximum transferable size is therefore determined by available disk space, filesystem support, connector availability, and surrounding network or platform infrastructure rather than a Verify MCP byte cap. Large connector uploads no longer depend on the MCP request remaining open for the full transfer.
+When the destination already contains the expected bytes, the tool verifies and reuses it without downloading again. Transfers use one-megabyte backpressure windows, request identity encoding, keep memory bounded, create parent directories, remove stale same-destination upload temporaries only while holding destination ownership, flush file data before rename, and atomically replace the destination only after the complete SHA-256 matches. A mismatch or cancellation removes the temporary file and leaves the previous destination unchanged.
+
+The actual maximum transferable size is therefore determined by available disk space, filesystem support, connector availability, and surrounding network or platform infrastructure rather than a Verify MCP byte cap. Uploads no longer depend on the MCP request remaining open for the full transfer.
 
 ---
 
@@ -380,9 +382,10 @@ Still enforced:
 - Profile contents, source env keys, and resolved values are not exposed by discovery.
 - Loader-sensitive env keys are reserved: `PATH`, `NODE_PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES`.
 - Destructive command classes require explicit confirmation.
-- Connector uploads default to durable async jobs, deduplicate identical destination+SHA retries, reject conflicting active hashes, and never persist signed download URLs.
+- Auto-mode uploads always use durable async jobs, deduplicate identical destination+SHA retries across process boundaries, reclaim interrupted ownership safely, reject conflicting active hashes, and never persist signed download URLs.
 - Binary upload requires a caller-supplied SHA-256 and uses a same-directory temporary file plus atomic rename; checksum failure never replaces the destination.
-- Binary upload does not apply extension, MIME, or application-level byte caps.
+- Binary upload does not apply extension, MIME, or application-level byte caps; practical limits remain disk, filesystem, connector, and network capacity.
+- Self-hosted systemd restart uses an external delayed handoff so the durable job journal and project lock finish before the Verify MCP process is replaced; post-restart health is verified in a follow-up call.
 - Browser actions remain explicit MCP calls and are marked as potentially side-effecting; current state can be read back through snapshot, screenshot, and diagnostics.
 - Browser absence degrades gracefully by default instead of stopping a usable dev server.
 - Workspaces and job caches are disposable after terminal execution.

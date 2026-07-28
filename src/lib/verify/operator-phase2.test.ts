@@ -3,11 +3,18 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { relatedPath } from "./operator-inspection";
+import type { RuntimeInspection } from "./operator-types";
 import {
   OPERATOR_MUTATION_MCP_TOOLS,
   handleOperatorMutationMcpTool,
 } from "./operator-mutation-mcp";
-import { classifyDestructiveCommand, sanitizeGitRemote } from "./operator-runtime";
+import {
+  acquireProjectLock,
+  classifyDestructiveCommand,
+  processCgroupMatchesService,
+  sanitizeGitRemote,
+  selectRuntimeRestartTarget,
+} from "./operator-runtime";
 
 const roots: string[] = [];
 
@@ -50,6 +57,86 @@ describe("private developer operator phase two", () => {
     expect(relatedPath("/root/purr-verify", "/root")).toBe(false);
     expect(relatedPath("/root/purr-verify", "/")).toBe(false);
     expect(relatedPath("/root/purr-verify", "/root/other-project")).toBe(false);
+  });
+
+  test("recognizes the current process inside a systemd service cgroup", () => {
+    expect(
+      processCgroupMatchesService(
+        "/system.slice/purr-verify.service",
+        "0::/system.slice/purr-verify.service",
+      ),
+    ).toBe(true);
+    expect(
+      processCgroupMatchesService(
+        "/system.slice/purr-verify.service",
+        "0::/system.slice/another.service",
+      ),
+    ).toBe(false);
+  });
+
+  test("selects the active systemd service bound to the exact project cwd", () => {
+    const runtime: RuntimeInspection = {
+      cwd: "/root/purr-verify",
+      tools: {},
+      pm2: [],
+      systemd: [
+        {
+          manager: "systemd",
+          name: "unrelated.service",
+          activeState: "active",
+          subState: "running",
+          mainPid: 11,
+          workingDirectory: "/root",
+          fragmentPath: null,
+          execStart: null,
+        },
+        {
+          manager: "systemd",
+          name: "purr-verify.service",
+          activeState: "active",
+          subState: "running",
+          mainPid: 22,
+          workingDirectory: "/root/purr-verify",
+          fragmentPath: null,
+          execStart: null,
+        },
+      ],
+      dockerCompose: [],
+      processes: [],
+      detectedManagers: ["systemd"],
+      notes: [],
+    };
+
+    expect(selectRuntimeRestartTarget(runtime)).toEqual({
+      manager: "systemd",
+      serviceName: "purr-verify.service",
+    });
+    expect(selectRuntimeRestartTarget(runtime, "unrelated.service")).toEqual({
+      manager: "systemd",
+      serviceName: "unrelated.service",
+    });
+    expect(selectRuntimeRestartTarget(runtime, "missing.service")).toBeNull();
+  });
+
+  test("reclaims a project lock as soon as its owning job is terminal", async () => {
+    const cwd = await tempDirectory();
+    const releaseFinished = await acquireProjectLock(
+      cwd,
+      "finished-job",
+      2_000,
+      () => false,
+      () => true,
+    );
+    const releaseNext = await acquireProjectLock(
+      cwd,
+      "next-job",
+      2_000,
+      () => false,
+      (ownerJobId) => ownerJobId === "next-job",
+    );
+
+    await releaseFinished();
+    await releaseNext();
   });
 
   test("sanitizes credentials from HTTP Git remotes", () => {

@@ -616,6 +616,12 @@ function parsePm2Services(output: string, cwd: string): Pm2RuntimeService[] {
   }
 }
 
+export function normalizeSystemdWorkingDirectory(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const normalized = value.trim().replace(/^[!~+-]+/, "");
+  return path.isAbsolute(normalized) ? path.resolve(normalized) : null;
+}
+
 function parseSystemdBlocks(output: string, cwd: string): SystemdRuntimeService[] {
   const services: SystemdRuntimeService[] = [];
   for (const block of output.split(/\n\s*\n/)) {
@@ -627,7 +633,7 @@ function parseSystemdBlocks(output: string, cwd: string): SystemdRuntimeService[
     }
     const name = values.Id;
     if (!name) continue;
-    const workingDirectory = values.WorkingDirectory || null;
+    const workingDirectory = normalizeSystemdWorkingDirectory(values.WorkingDirectory);
     const execStart = values.ExecStart || null;
     if (!relatedPath(cwd, workingDirectory) && !(execStart && execStart.includes(cwd))) continue;
     services.push({

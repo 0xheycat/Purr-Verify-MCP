@@ -11,6 +11,7 @@ import {
   inspectProject,
   inspectRuntime,
 } from "./operator-inspection";
+import type { RuntimeInspection } from "./operator-types";
 import type {
   DeploymentSnapshot,
   DeploymentSnapshotFile,
@@ -604,37 +605,143 @@ export async function deployGitRevision(step: OperatorGitDeployStep): Promise<Op
   };
 }
 
-async function resolveRestart(step: OperatorRestartStep): Promise<{
+interface ResolvedRestartTarget {
   manager: Exclude<ServiceManager, "auto">;
   serviceName?: string;
   composeFile?: string;
-}> {
+}
+
+export function selectRuntimeRestartTarget(
+  runtime: RuntimeInspection,
+  requestedServiceName?: string,
+): ResolvedRestartTarget | null {
+  if (requestedServiceName) {
+    const pm2 = runtime.pm2.find((service) => service.name === requestedServiceName);
+    if (pm2) return { manager: "pm2", serviceName: pm2.name };
+    const systemd = runtime.systemd.find((service) => service.name === requestedServiceName);
+    if (systemd) return { manager: "systemd", serviceName: systemd.name };
+    const compose = runtime.dockerCompose.find(
+      (service) => service.service === requestedServiceName || service.name === requestedServiceName,
+    );
+    if (compose) {
+      return {
+        manager: "docker_compose",
+        serviceName: compose.service ?? requestedServiceName,
+        composeFile: compose.composeFile,
+      };
+    }
+    return null;
+  }
+
+  const pm2 =
+    runtime.pm2.find((service) => service.status === "online" && service.cwd === runtime.cwd) ??
+    runtime.pm2.find((service) => service.status === "online") ??
+    runtime.pm2[0];
+  if (pm2) return { manager: "pm2", serviceName: pm2.name };
+
+  const systemd =
+    runtime.systemd.find(
+      (service) => service.activeState === "active" && service.workingDirectory === runtime.cwd,
+    ) ??
+    runtime.systemd.find(
+      (service) => service.activeState === "active" && service.subState === "running",
+    ) ??
+    runtime.systemd[0];
+  if (systemd) return { manager: "systemd", serviceName: systemd.name };
+
+  const compose =
+    runtime.dockerCompose.find((service) => service.state === "running") ?? runtime.dockerCompose[0];
+  if (compose) {
+    return {
+      manager: "docker_compose",
+      serviceName: compose.service ?? undefined,
+      composeFile: compose.composeFile,
+    };
+  }
+  return null;
+}
+
+async function resolveRestart(step: OperatorRestartStep): Promise<ResolvedRestartTarget> {
   if (step.manager !== "auto") {
     return { manager: step.manager, serviceName: step.serviceName, composeFile: step.composeFile };
   }
   const runtime = await inspectRuntime(step.cwd, { includeProcesses: false });
-  if (runtime.pm2[0]) return { manager: "pm2", serviceName: step.serviceName ?? runtime.pm2[0].name };
-  if (runtime.systemd[0]) return { manager: "systemd", serviceName: step.serviceName ?? runtime.systemd[0].name };
-  if (runtime.dockerCompose[0]) {
+  const selected = selectRuntimeRestartTarget(runtime, step.serviceName);
+  if (selected) {
     return {
-      manager: "docker_compose",
-      serviceName: step.serviceName ?? runtime.dockerCompose[0].service ?? undefined,
-      composeFile: step.composeFile ?? runtime.dockerCompose[0].composeFile,
+      ...selected,
+      composeFile: step.composeFile ?? selected.composeFile,
     };
   }
-  if (step.customArgv?.length) return { manager: "custom", serviceName: step.serviceName };
+  if (step.serviceName) {
+    throw new Error(`service was not found for this project: ${step.serviceName}`);
+  }
+  if (step.customArgv?.length) return { manager: "custom" };
   throw new Error("no service manager matched this project");
+}
+
+export function processCgroupMatchesService(
+  serviceControlGroup: string,
+  processCgroupText: string
+): boolean {
+  const controlGroup = serviceControlGroup.trim().replace(/\/$/, "");
+  if (!controlGroup || controlGroup === "/") return false;
+  return processCgroupText
+    .split(/\r?\n/)
+    .map((line) => line.slice(line.lastIndexOf(":") + 1).trim().replace(/\/$/, ""))
+    .some((group) => group === controlGroup || group.startsWith(`${controlGroup}/`));
+}
+
+async function currentProcessBelongsToSystemdService(serviceName: string): Promise<boolean> {
+  const controlGroup = await execCapture(
+    "systemctl",
+    ["show", serviceName, "--property=ControlGroup", "--value"],
+    process.cwd(),
+    30_000
+  );
+  if (controlGroup.code !== 0 || !controlGroup.stdout.trim()) return false;
+  const processCgroup = await fs.readFile("/proc/self/cgroup", "utf8").catch(() => "");
+  return processCgroupMatchesService(controlGroup.stdout, processCgroup);
+}
+
+function restartHandoffUnitName(serviceName: string): string {
+  const safeService = serviceName.replace(/[^A-Za-z0-9_.-]+/g, "-").slice(0, 80);
+  return `purr-restart-${safeService}-${randomUUID().slice(0, 8)}`;
 }
 
 export async function restartService(step: OperatorRestartStep): Promise<OperatorStepResult> {
   const resolved = await resolveRestart(step);
   let argv: string[];
+  let restartHandoff: OperatorStepResult["restartHandoff"];
   if (resolved.manager === "pm2") {
     if (!resolved.serviceName) throw new Error("PM2 serviceName is required");
     argv = ["pm2", step.action === "restart" ? "restart" : "reload", resolved.serviceName, "--update-env"];
   } else if (resolved.manager === "systemd") {
     if (!resolved.serviceName) throw new Error("systemd serviceName is required");
-    argv = ["systemctl", step.action === "reload" ? "reload" : "restart", resolved.serviceName];
+    const action = step.action === "reload" ? "reload" : "restart";
+    const selfRestart =
+      action === "restart" &&
+      (await currentProcessBelongsToSystemdService(resolved.serviceName));
+    if (selfRestart) {
+      const delayMs = 5_000;
+      argv = [
+        "systemd-run",
+        "--quiet",
+        "--collect",
+        `--unit=${restartHandoffUnitName(resolved.serviceName)}`,
+        `--on-active=${delayMs}ms`,
+        "systemctl",
+        "restart",
+        resolved.serviceName,
+      ];
+      restartHandoff = {
+        manager: "systemd",
+        serviceName: resolved.serviceName,
+        delayMs,
+      };
+    } else {
+      argv = ["systemctl", action, resolved.serviceName];
+    }
   } else if (resolved.manager === "docker_compose") {
     const composeFile = resolved.composeFile ?? "compose.yml";
     argv = step.action === "up"
@@ -645,7 +752,7 @@ export async function restartService(step: OperatorRestartStep): Promise<Operato
   } else {
     throw new Error("custom restart requires customArgv");
   }
-  return runOperatorCommand(
+  const result = await runOperatorCommand(
     {
       type: "command",
       label: step.label,
@@ -657,6 +764,17 @@ export async function restartService(step: OperatorRestartStep): Promise<Operato
     {},
     10 * 60_000
   );
+  if (!restartHandoff || !result.ok) return result;
+  return {
+    ...result,
+    stdout: [
+      result.stdout.trim(),
+      `scheduled external restart handoff for ${restartHandoff.serviceName} in ${restartHandoff.delayMs}ms`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    restartHandoff,
+  };
 }
 
 async function tcpCheck(host: string, port: number, timeoutMs: number): Promise<void> {
@@ -810,11 +928,51 @@ export function projectLockKey(cwd: string): string {
   return createHash("sha256").update(path.resolve(cwd)).digest("hex").slice(0, 32);
 }
 
+function processIsAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (caught) {
+    return (caught as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+interface ProjectLockRecord {
+  jobId: string;
+  cwd: string;
+  pid: number;
+  acquiredAt: string;
+}
+
+function validProjectLock(value: unknown): value is ProjectLockRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Partial<ProjectLockRecord>;
+  return (
+    typeof record.jobId === "string" &&
+    typeof record.cwd === "string" &&
+    Number.isSafeInteger(record.pid) &&
+    typeof record.acquiredAt === "string"
+  );
+}
+
+async function removeProjectLockIfOwned(file: string, ownerJobId: string): Promise<boolean> {
+  try {
+    const current = JSON.parse(await fs.readFile(file, "utf8")) as unknown;
+    if (!validProjectLock(current) || current.jobId !== ownerJobId) return false;
+    await fs.unlink(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function acquireProjectLock(
   cwd: string,
   jobId: string,
   timeoutMs: number,
-  canceled: () => boolean
+  canceled: () => boolean,
+  ownerJobIsActive: (ownerJobId: string) => boolean = () => true
 ): Promise<() => Promise<void>> {
   const root = locksRoot();
   await fs.mkdir(root, { recursive: true });
@@ -824,30 +982,38 @@ export async function acquireProjectLock(
     if (canceled()) throw new Error("canceled while waiting for project lock");
     try {
       const handle = await fs.open(file, "wx", 0o600);
-      await handle.writeFile(JSON.stringify({ jobId, cwd, pid: process.pid, acquiredAt: nowIso() }));
-      await handle.close();
+      try {
+        await handle.writeFile(JSON.stringify({ jobId, cwd, pid: process.pid, acquiredAt: nowIso() }));
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
       return async () => {
-        try {
-          const current = JSON.parse(await fs.readFile(file, "utf8")) as { jobId?: string };
-          if (current.jobId === jobId) await fs.unlink(file);
-        } catch {
-          // Lock may already have been released.
-        }
+        await removeProjectLockIfOwned(file, jobId);
       };
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== "EEXIST") throw error;
-      try {
-        const stat = await fs.stat(file);
-        if (Date.now() - stat.mtimeMs > 12 * 60 * 60 * 1000) {
-          await fs.unlink(file);
+    }
+
+    try {
+      const raw = await fs.readFile(file, "utf8");
+      const current = JSON.parse(raw) as unknown;
+      if (validProjectLock(current)) {
+        if (!processIsAlive(current.pid) || !ownerJobIsActive(current.jobId)) {
+          if (await removeProjectLockIfOwned(file, current.jobId)) continue;
+        }
+      } else {
+        const lockStat = await fs.stat(file);
+        if (Date.now() - lockStat.mtimeMs >= 5_000) {
+          await fs.unlink(file).catch(() => undefined);
           continue;
         }
-      } catch {
-        continue;
       }
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    } catch {
+      continue;
     }
+    await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(`timed out waiting for project lock: ${cwd}`);
 }

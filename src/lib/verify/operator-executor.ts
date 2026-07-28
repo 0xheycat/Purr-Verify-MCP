@@ -154,7 +154,9 @@ async function executeStep(
     if (step.restart) {
       const restarted = await restartService(step.restart);
       output.push(restarted.stdout || restarted.stderr);
-      if (!restarted.ok) return { ...restarted, stdout: output.join("\n") };
+      if (!restarted.ok || restarted.restartHandoff) {
+        return { ...restarted, stdout: output.join("\n") };
+      }
     }
     for (const check of step.healthChecks ?? []) {
       const health = await runHealthCheck(check, step.cwd);
@@ -188,7 +190,9 @@ async function rollbackAfterFailure(
   };
   if (!result.ok) return evidence;
   if (operation.restartAfterRollback) {
-    evidence.restart = await restartService(operation.restartAfterRollback);
+    const restarted = await restartService(operation.restartAfterRollback);
+    evidence.restart = restarted;
+    if (restarted.restartHandoff) return evidence;
   }
   const healthResults: OperatorStepResult[] = [];
   for (const check of operation.healthAfterRollback ?? []) {
@@ -252,7 +256,11 @@ async function runOperatorJob(jobId: string): Promise<void> {
         operation.cwd,
         jobId,
         timeoutPolicy.jobTimeoutMs,
-        () => runtime.cancelRequested === true
+        () => runtime.cancelRequested === true,
+        (ownerJobId) => {
+          const owner = getJob(ownerJobId);
+          return Boolean(owner && (owner.status === "queued" || owner.status === "running"));
+        }
       );
     }
 
@@ -310,6 +318,29 @@ async function runOperatorJob(jobId: string): Promise<void> {
         effectiveCommand: stepLabel(step),
       });
       runtime.currentChild = null;
+
+      if (result.restartHandoff) {
+        const latest = getJob(jobId);
+        const deferredSteps = operation.steps.slice(index + 1).map(stepLabel);
+        for (let deferredIndex = index + 1; deferredIndex < operation.steps.length; deferredIndex += 1) {
+          updateOperatorCommand(jobId, deferredIndex, {
+            status: "skipped",
+            stderr: "deferred until the externally scheduled self-restart completes",
+            finishedAt: nowIso(),
+          });
+        }
+        updateJob(jobId, {
+          metadata: {
+            ...(latest?.metadata ?? job.metadata),
+            _purrOperatorOperation: operation,
+            restartHandoff: result.restartHandoff,
+            postRestartHealthRequired: deferredSteps.length > 0,
+            deferredSteps,
+          },
+        });
+        finishOperatorJob(jobId, "success", null);
+        return;
+      }
 
       if (runtime.cancelRequested) {
         let rollbackEvidence: Record<string, unknown> | null = null;

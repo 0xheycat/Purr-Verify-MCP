@@ -7,6 +7,7 @@ import {
   discoverProjects,
   inspectEnvironment,
   inspectProject,
+  normalizeSystemdWorkingDirectory,
   parseDotEnv,
 } from "./operator-inspection";
 import type { EnvironmentInspection, RuntimeInspection } from "./operator-types";
@@ -68,6 +69,12 @@ GAMMA=four # trailing comment
 INVALID LINE
 `)
     ).toEqual({ ALPHA: "one two", BETA: "three", GAMMA: "four" });
+  });
+
+  test("normalizes systemd working-directory prefixes before path matching", () => {
+    expect(normalizeSystemdWorkingDirectory("!/root")).toBe("/root");
+    expect(normalizeSystemdWorkingDirectory("-/root/purr-verify")).toBe("/root/purr-verify");
+    expect(normalizeSystemdWorkingDirectory("relative/path")).toBeNull();
   });
 
   test("discovers project markers without descending into detected roots", async () => {
