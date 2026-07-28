@@ -162,6 +162,11 @@ export interface OperatorStepResult {
   snapshotId?: string;
   actualHead?: string;
   backgroundPid?: number;
+  restartHandoff?: {
+    manager: "systemd";
+    serviceName: string;
+    delayMs: number;
+  };
 }
 
 export interface OperatorEnqueueInput {
