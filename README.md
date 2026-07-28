@@ -291,13 +291,16 @@ Attach any file in ChatGPT, calculate or provide its expected SHA-256, then call
 {
   "file": "<local connector file>",
   "destination": "/opt/example/artifacts/model.bin",
-  "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "mode": "auto"
 }
 ```
 
-`purr_upload_file` treats the input as opaque bytes. It does not restrict extension, MIME type, or file size at the application layer. The transfer is streamed with backpressure, parent directories are created, and an existing destination is atomically replaced only after the complete SHA-256 matches. A mismatch removes the temporary file and leaves the previous destination unchanged.
+`purr_upload_file` treats the input as opaque bytes. It does not restrict extension, MIME type, or file size at the application layer. With `mode: "auto"`, ChatGPT connector downloads return immediately with a durable `jobId`; poll `purr_get_job_status`, inspect progress with `purr_get_job_logs`, or stop the transfer with `purr_cancel_job`. Mounted server-local files remain synchronous by default.
 
-The actual maximum transferable size is therefore determined by available disk space, filesystem support, connector availability, and surrounding network or platform infrastructure rather than a Verify MCP byte cap.
+Identical retries for the same normalized destination and SHA-256 reuse one active upload job instead of starting duplicate streams. A different hash is rejected while that destination is owned. When the destination already contains the expected bytes, the tool verifies and reuses it without downloading again. Transfers use backpressure, create parent directories, remove stale same-destination upload temporaries, and atomically replace the destination only after the complete SHA-256 matches. A mismatch leaves the previous destination unchanged.
+
+The actual maximum transferable size is therefore determined by available disk space, filesystem support, connector availability, and surrounding network or platform infrastructure rather than a Verify MCP byte cap. Large connector uploads no longer depend on the MCP request remaining open for the full transfer.
 
 ---
 
@@ -377,6 +380,7 @@ Still enforced:
 - Profile contents, source env keys, and resolved values are not exposed by discovery.
 - Loader-sensitive env keys are reserved: `PATH`, `NODE_PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES`.
 - Destructive command classes require explicit confirmation.
+- Connector uploads default to durable async jobs, deduplicate identical destination+SHA retries, reject conflicting active hashes, and never persist signed download URLs.
 - Binary upload requires a caller-supplied SHA-256 and uses a same-directory temporary file plus atomic rename; checksum failure never replaces the destination.
 - Binary upload does not apply extension, MIME, or application-level byte caps.
 - Browser actions remain explicit MCP calls and are marked as potentially side-effecting; current state can be read back through snapshot, screenshot, and diagnostics.

@@ -25,7 +25,7 @@ Before verification work:
 2. Call `health_check`.
 3. Call `list_allowed_commands`.
 4. For browser work, call `purr_browser_doctor`, then start one managed session with `purr_work_session_start` and close it when finished.
-5. For binary transfer, call `purr_upload_file` with the connector file, an absolute destination, and the expected SHA-256.
+5. For binary transfer, call `purr_upload_file` with the connector file, an absolute destination, and the expected SHA-256. Connector downloads default to a durable async job; poll `purr_get_job_status` until terminal.
 6. Confirm the target `repo`, `ref`, and command list.
 7. Use `create_verification_job` with `mode: "async"` for install/build/lint/typecheck/test.
 8. Poll `get_verification_job` until terminal status.
@@ -35,7 +35,7 @@ Before verification work:
 - Never run heavy commands in sync mode.
 - Heavy commands include install, build, lint, typecheck, test, Prisma generate, Playwright, Cypress, Vitest, Jest, and any long-running CI command.
 - Use sync mode only for a short single smoke command that is expected to finish quickly.
-- Binary upload accepts opaque bytes of every format and applies no extension, MIME, or application-level byte cap. SHA-256 is required, and checksum mismatch must leave the destination unchanged.
+- Binary upload accepts opaque bytes of every format and applies no extension, MIME, or application-level byte cap. Connector uploads default to durable async jobs, identical normalized destination+SHA retries must reuse one active job, conflicting active hashes must fail without starting another stream, signed download URLs must never be persisted, and checksum mismatch must leave the destination unchanged.
 - Reuse the `pursr` npm package for browser discovery, sessions, actions, screenshots, inspection, diagnostics, and artifacts. Do not recreate that browser engine in Verify MCP.
 - Missing Chrome should return an actionable warning and preserve a dev-server-only session unless the caller explicitly requires browser attachment.
 - Retry transient read-only MCP transport errors, timeouts, HTTP 429, and HTTP 5xx at most five times in the current run with backoff of 2, 4, 8, 16, and 32 seconds. Use the official GitHub MCP as a read-only fallback when it is available and appropriate.

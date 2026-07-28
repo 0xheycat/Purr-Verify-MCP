@@ -7,6 +7,7 @@ import {
   FILE_UPLOAD_MCP_TOOLS,
   handleFileUploadMcpTool,
   uploadFile,
+import { getJob } from "./store";
 } from "./file-upload-mcp";
 
 const roots: string[] = [];
@@ -24,6 +25,15 @@ async function tempRoot(): Promise<string> {
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
+async function waitForTerminalJob(jobId: string) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const job = getJob(jobId);
+    if (job && !["queued", "running"].includes(job.status)) return job;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`upload job did not finish: ${jobId}`);
+}
+
 
 describe("binary connector file upload", () => {
   test("exposes one file-bound mutation tool without format or size caps", () => {
@@ -33,11 +43,12 @@ describe("binary connector file upload", () => {
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
-        idempotentHint: false,
+        idempotentHint: true,
       },
       _meta: { "openai/fileParams": ["file"] },
     });
     const schema = JSON.stringify(FILE_UPLOAD_MCP_TOOLS[0].inputSchema);
+    expect(schema).toContain('"enum":["auto","sync","async"]');
     expect(schema).toContain('"required":["file","destination","sha256"]');
     expect(schema).not.toMatch(/maxLength|maximum|maxBytes|mimeTypes|extensions/);
   });
@@ -109,6 +120,199 @@ describe("binary connector file upload", () => {
     expect(JSON.stringify(result)).not.toContain("private-token-value");
     expect(await readFile(destination)).toEqual(bytes);
   });
+  test("deduplicates concurrent identical retries into one connector download", async () => {
+    const root = await tempRoot();
+    const destination = join(root, "deduplicated.bin");
+    const bytes = randomBytes(256 * 1024 + 17);
+    let fetchCalls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchImpl = (async () => {
+      fetchCalls += 1;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          async start(controller) {
+            await gate;
+            controller.enqueue(bytes);
+            controller.close();
+          },
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+    const input = {
+      file: {
+        download_url: "https://files.example.test/retry-token",
+        name: "retry.bin",
+      },
+      destination,
+      sha256: sha256(bytes),
+    };
+
+    const first = uploadFile(input, { fetchImpl });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const second = uploadFile(input, { fetchImpl });
+    release();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(fetchCalls).toBe(1);
+    expect(firstResult.sha256).toBe(sha256(bytes));
+    expect(secondResult).toMatchObject({
+      sha256: sha256(bytes),
+      deduplicated: true,
+    });
+    expect(await readFile(destination)).toEqual(bytes);
+  });
+
+  test("returns an already verified destination without downloading again", async () => {
+    const root = await tempRoot();
+    const destination = join(root, "already-there.bin");
+    const bytes = randomBytes(32_769);
+    await writeFile(destination, bytes);
+
+    const result = await uploadFile(
+      {
+        file: {
+          download_url: "https://files.example.test/unused-token",
+          name: "existing.bin",
+        },
+        destination,
+        sha256: sha256(bytes),
+      },
+      {
+        fetchImpl: (async () => {
+          throw new Error("fetch must not run for a verified destination");
+        }) as unknown as typeof fetch,
+      },
+    );
+
+    expect(result).toMatchObject({
+      destination,
+      sha256: sha256(bytes),
+      reusedExisting: true,
+      replaced: true,
+    });
+  });
+
+  test("auto-routes connector uploads to one durable job and deduplicates tool retries", async () => {
+    const root = await tempRoot();
+    const destination = join(root, "async.bin");
+    const bytes = randomBytes(192 * 1024 + 31);
+    const signedUrl = "https://files.example.test/async-private-token";
+    let fetchCalls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchImpl = (async () => {
+      fetchCalls += 1;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          async start(controller) {
+            await gate;
+            controller.enqueue(bytes);
+            controller.close();
+          },
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+    const args = {
+      file: {
+        file_id: "file-async",
+        download_url: signedUrl,
+        name: "async.bin",
+        size: bytes.byteLength,
+      },
+      destination,
+      sha256: sha256(bytes),
+    };
+
+    const first = await handleFileUploadMcpTool("purr_upload_file", args, { fetchImpl });
+    const second = await handleFileUploadMcpTool("purr_upload_file", args, { fetchImpl });
+    const firstPayload = first.payload as { jobId: string; status: string; deduplicated: boolean };
+    const secondPayload = second.payload as { jobId: string; status: string; deduplicated: boolean };
+
+    expect(firstPayload).toMatchObject({ status: "running", deduplicated: false });
+    expect(secondPayload).toMatchObject({
+      jobId: firstPayload.jobId,
+      status: "running",
+      deduplicated: true,
+    });
+    expect(fetchCalls).toBeLessThanOrEqual(1);
+
+    release();
+    const job = await waitForTerminalJob(firstPayload.jobId);
+    expect(fetchCalls).toBe(1);
+    expect(job.status).toBe("success");
+    expect(job.summary.passed).toBe(true);
+    expect(JSON.stringify(job)).not.toContain("async-private-token");
+    expect(await readFile(destination)).toEqual(bytes);
+  });
+
+  test("rejects a conflicting hash while another upload owns the destination", async () => {
+    const root = await tempRoot();
+    const destination = join(root, "conflict.bin");
+    const oldBytes = Buffer.from("old-content");
+    const replacement = randomBytes(96 * 1024 + 11);
+    await writeFile(destination, oldBytes);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchImpl = (async () => {
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          async start(controller) {
+            await gate;
+            controller.enqueue(replacement);
+            controller.close();
+          },
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    const first = await handleFileUploadMcpTool(
+      "purr_upload_file",
+      {
+        file: {
+          download_url: "https://files.example.test/replacement",
+          name: "replacement.bin",
+        },
+        destination,
+        sha256: sha256(replacement),
+      },
+      { fetchImpl },
+    );
+    const firstPayload = first.payload as { jobId: string };
+
+    const conflicting = await handleFileUploadMcpTool(
+      "purr_upload_file",
+      {
+        file: {
+          download_url: "https://files.example.test/old-content",
+          name: "old.bin",
+        },
+        destination,
+        sha256: sha256(oldBytes),
+      },
+      { fetchImpl },
+    );
+    expect(conflicting).toMatchObject({
+      handled: true,
+      isError: true,
+      payload: { error: "upload_in_progress" },
+    });
+
+    release();
+    const job = await waitForTerminalJob(firstPayload.jobId);
+    expect(job.status).toBe("success");
+    expect(await readFile(destination)).toEqual(replacement);
+  });
+
 
   test("leaves an existing destination unchanged when sha256 does not match", async () => {
     const root = await tempRoot();
