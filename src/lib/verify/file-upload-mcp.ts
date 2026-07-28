@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { lstat, mkdir, open, readdir, rename, rm } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, readdir, rename, rm, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -10,7 +10,9 @@ import {
   createJob,
   flushJobPersistence,
   getJob,
+  getJobDurable,
   getRuntime,
+  loadPersisted,
   updateJob,
 } from "./store";
 import type { Job } from "./types";
@@ -170,6 +172,25 @@ interface PreparedUpload {
   source: ResolvedUploadSource;
 }
 
+interface UploadLeaseRecord {
+  version: 1;
+  token: string;
+  expectedSha256: string;
+  jobId?: string;
+  pid: number;
+  acquiredAt: string;
+}
+
+interface UploadLease {
+  path: string;
+  token: string;
+}
+
+interface UploadLeaseResult {
+  lease?: UploadLease;
+  existingJobId?: string;
+}
+
 interface ActiveUpload {
   expectedSha256: string;
   promise: Promise<UploadFileResult>;
@@ -184,6 +205,11 @@ const fileUploadGlobal = globalThis as FileUploadGlobal;
 const activeUploads =
   fileUploadGlobal.__purrActiveFileUploads ?? new Map<string, ActiveUpload>();
 fileUploadGlobal.__purrActiveFileUploads = activeUploads;
+
+const STREAM_HIGH_WATER_MARK = 1024 * 1024;
+const LOCK_BIND_WAIT_ATTEMPTS = 40;
+const LOCK_BIND_WAIT_MS = 25;
+const MALFORMED_LOCK_GRACE_MS = 5_000;
 
 const FILE_PARAMETER_SCHEMA = {
   oneOf: [
@@ -218,7 +244,7 @@ export const FILE_UPLOAD_MCP_TOOLS: FileUploadMcpToolDefinition[] = [
   {
     name: "purr_upload_file",
     description:
-      "Upload one ChatGPT connector file to an absolute server destination with required SHA-256 verification and atomic replacement. Connector downloads auto-route to a durable background job so large transfers return immediately with a jobId; mounted local files remain synchronous by default. Identical retries are deduplicated and every file format is accepted without an application-level byte limit.",
+      "Upload one ChatGPT connector file to an absolute server destination with required SHA-256 verification and atomic replacement. Auto mode always returns immediately with a durable jobId for both connector downloads and mounted local files. Transfers use bounded-memory streaming, process-safe destination ownership, retry deduplication, cancellation, and no application-level file-size limit.",
     inputSchema: {
       type: "object",
       properties: {
@@ -238,7 +264,7 @@ export const FILE_UPLOAD_MCP_TOOLS: FileUploadMcpToolDefinition[] = [
           enum: ["auto", "sync", "async"],
           default: "auto",
           description:
-            "auto routes connector downloads to a durable background job and mounted local files synchronously. Use async to always return a jobId or sync only for a transfer known to fit the caller transport window.",
+            "auto and async return a durable jobId for every source type. Use sync only for a deliberately short transfer known to fit the caller transport window.",
         },
       },
       required: ["file", "destination", "sha256"],
@@ -291,14 +317,154 @@ function bytesValue(bytes: bigint): number | string {
   return bytes <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(bytes) : bytes.toString();
 }
 
+export function uploadLockPath(destination: string): string {
+  return `${dirname(destination)}/.${basename(destination)}.purr-upload.lock`;
+}
+
+function processIsAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (caught) {
+    return (caught as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function jobIsActive(job: Job | null | undefined): boolean {
+  return Boolean(job && (job.status === "queued" || job.status === "running"));
+}
+
+async function readUploadLease(path: string): Promise<UploadLeaseRecord | null> {
+  try {
+    const parsed = JSON.parse(await readFile(path, "utf8")) as Partial<UploadLeaseRecord>;
+    if (
+      parsed.version !== 1 ||
+      typeof parsed.token !== "string" ||
+      !/^[a-f0-9-]{20,}$/i.test(parsed.token) ||
+      typeof parsed.expectedSha256 !== "string" ||
+      !/^[a-f0-9]{64}$/i.test(parsed.expectedSha256) ||
+      !Number.isSafeInteger(parsed.pid) ||
+      typeof parsed.acquiredAt !== "string"
+    ) {
+      return null;
+    }
+    return parsed as UploadLeaseRecord;
+  } catch {
+    return null;
+  }
+}
+
+async function removeUploadLeaseIfOwned(path: string, token: string): Promise<boolean> {
+  const current = await readUploadLease(path);
+  if (!current || current.token !== token) return false;
+  await rm(path, { force: true });
+  return true;
+}
+
+async function acquireUploadLease(
+  prepared: PreparedUpload,
+  options: { allowExistingJob: boolean },
+): Promise<UploadLeaseResult> {
+  const parent = dirname(prepared.destination);
+  await mkdir(parent, { recursive: true });
+  const path = uploadLockPath(prepared.destination);
+  const token = randomUUID();
+
+  for (let attempt = 0; attempt < LOCK_BIND_WAIT_ATTEMPTS; attempt += 1) {
+    const record: UploadLeaseRecord = {
+      version: 1,
+      token,
+      expectedSha256: prepared.expectedSha256,
+      pid: process.pid,
+      acquiredAt: new Date().toISOString(),
+    };
+    try {
+      const handle = await open(path, "wx", 0o600);
+      try {
+        await handle.writeFile(JSON.stringify(record));
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      return { lease: { path, token } };
+    } catch (caught) {
+      if ((caught as NodeJS.ErrnoException).code !== "EEXIST") throw caught;
+    }
+
+    const existing = await readUploadLease(path);
+    if (!existing) {
+      const ageMs = await stat(path)
+        .then((value) => Date.now() - value.mtimeMs)
+        .catch(() => 0);
+      if (ageMs >= MALFORMED_LOCK_GRACE_MS) {
+        await rm(path, { force: true }).catch(() => undefined);
+        continue;
+      }
+      await new Promise((resolve) => setTimeout(resolve, LOCK_BIND_WAIT_MS));
+      continue;
+    }
+
+    const ownerJob = existing.jobId
+      ? getJob(existing.jobId) ?? (await getJobDurable(existing.jobId)) ?? null
+      : null;
+    const ownerAlive = processIsAlive(existing.pid);
+    const knownTerminalOwner = Boolean(ownerJob && !jobIsActive(ownerJob));
+    if (!ownerAlive || knownTerminalOwner) {
+      await removeUploadLeaseIfOwned(path, existing.token);
+      continue;
+    }
+    if (existing.expectedSha256 !== prepared.expectedSha256) {
+      throw new FileUploadError(
+        "upload_in_progress",
+        `another upload is already active for ${prepared.destination}`,
+      );
+    }
+    if (options.allowExistingJob && existing.jobId && jobIsActive(ownerJob)) {
+      return { existingJobId: existing.jobId };
+    }
+    await new Promise((resolve) => setTimeout(resolve, LOCK_BIND_WAIT_MS));
+  }
+
+  throw new FileUploadError(
+    "upload_in_progress",
+    `another upload is initializing for ${prepared.destination}`,
+  );
+}
+
+async function bindUploadLease(lease: UploadLease, jobId: string): Promise<void> {
+  const current = await readUploadLease(lease.path);
+  if (!current || current.token !== lease.token) {
+    throw new FileUploadError("upload_lock_lost", "upload destination lock was lost");
+  }
+  const handle = await open(lease.path, "w", 0o600);
+  try {
+    await handle.writeFile(JSON.stringify({ ...current, jobId } satisfies UploadLeaseRecord));
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function releaseUploadLease(lease: UploadLease | undefined): Promise<void> {
+  if (!lease) return;
+  await removeUploadLeaseIfOwned(lease.path, lease.token).catch(() => undefined);
+}
+
 async function sourceStream(
   source: ResolvedUploadSource,
   fetchImpl: typeof fetch,
   signal?: AbortSignal,
 ): Promise<Readable> {
-  if (source.kind === "local") return createReadStream(source.path);
+  if (source.kind === "local") {
+    return createReadStream(source.path, { highWaterMark: STREAM_HIGH_WATER_MARK });
+  }
 
-  const response = await fetchImpl(source.url, { redirect: "follow", signal });
+  const response = await fetchImpl(source.url, {
+    redirect: "follow",
+    signal,
+    headers: { "accept-encoding": "identity" },
+  });
   if (!response.ok) {
     throw new FileUploadError(
       "connector_download_failed",
@@ -332,7 +498,7 @@ async function existingFileMode(destination: string): Promise<{
 async function hashFile(path: string): Promise<{ sha256: string; bytes: bigint }> {
   const hash = createHash("sha256");
   let bytes = BigInt(0);
-  for await (const chunk of createReadStream(path)) {
+  for await (const chunk of createReadStream(path, { highWaterMark: STREAM_HIGH_WATER_MARK })) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     hash.update(buffer);
     bytes += BigInt(buffer.byteLength);
@@ -378,10 +544,18 @@ async function cleanupTemporaryFiles(destination: string): Promise<void> {
   );
 }
 
-async function syncPath(path: string): Promise<void> {
+async function syncPath(path: string, dataOnly = false): Promise<void> {
   const handle = await open(path, "r");
   try {
-    await handle.sync();
+    if (dataOnly) {
+      try {
+        await handle.datasync();
+      } catch {
+        await handle.sync();
+      }
+    } else {
+      await handle.sync();
+    }
   } finally {
     await handle.close();
   }
@@ -390,16 +564,10 @@ async function syncPath(path: string): Promise<void> {
 async function performUpload(
   prepared: PreparedUpload,
   dependencies: UploadDependencies,
+  lease: UploadLease,
 ): Promise<UploadFileResult> {
   const parent = dirname(prepared.destination);
-  await mkdir(parent, { recursive: true });
-  await cleanupTemporaryFiles(prepared.destination);
-  const reused = await existingVerifiedResult(prepared);
-  if (reused) return reused;
-  const current = await existingFileMode(prepared.destination);
-  const temporary = `${parent}/.${basename(prepared.destination)}.purr-upload-${randomUUID()}.tmp`;
-  const hash = createHash("sha256");
-  let bytes = BigInt(0);
+  let temporary: string | null = null;
   const abortController = new AbortController();
   const cancelTimer = dependencies.isCanceled
     ? setInterval(() => {
@@ -408,21 +576,31 @@ async function performUpload(
     : null;
   cancelTimer?.unref?.();
 
-  const meter = new Transform({
-    transform(chunk, _encoding, callback) {
-      if (dependencies.isCanceled?.()) {
-        callback(new FileUploadError("upload_canceled", "upload canceled"));
-        return;
-      }
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      hash.update(buffer);
-      bytes += BigInt(buffer.byteLength);
-      dependencies.onProgress?.(bytes);
-      callback(null, buffer);
-    },
-  });
-
   try {
+    await mkdir(parent, { recursive: true });
+    await cleanupTemporaryFiles(prepared.destination);
+    const reused = await existingVerifiedResult(prepared);
+    if (reused) return reused;
+
+    const current = await existingFileMode(prepared.destination);
+    temporary = `${parent}/.${basename(prepared.destination)}.purr-upload-${randomUUID()}.tmp`;
+    const hash = createHash("sha256");
+    let bytes = BigInt(0);
+    const meter = new Transform({
+      highWaterMark: STREAM_HIGH_WATER_MARK,
+      transform(chunk, _encoding, callback) {
+        if (dependencies.isCanceled?.()) {
+          callback(new FileUploadError("upload_canceled", "upload canceled"));
+          return;
+        }
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        hash.update(buffer);
+        bytes += BigInt(buffer.byteLength);
+        dependencies.onProgress?.(bytes);
+        callback(null, buffer);
+      },
+    });
+
     const readable = await sourceStream(
       prepared.source,
       dependencies.fetchImpl ?? fetch,
@@ -431,7 +609,11 @@ async function performUpload(
     await pipeline(
       readable,
       meter,
-      createWriteStream(temporary, { flags: "wx", mode: current.mode }),
+      createWriteStream(temporary, {
+        flags: "wx",
+        mode: current.mode,
+        highWaterMark: STREAM_HIGH_WATER_MARK,
+      }),
     );
     const actualSha256 = hash.digest("hex");
     if (actualSha256 !== prepared.expectedSha256) {
@@ -440,8 +622,9 @@ async function performUpload(
         `sha256 mismatch: expected ${prepared.expectedSha256}, received ${actualSha256}`,
       );
     }
-    await syncPath(temporary);
+    await syncPath(temporary, true);
     await rename(temporary, prepared.destination);
+    temporary = null;
     try {
       await syncPath(parent);
     } catch {
@@ -457,13 +640,14 @@ async function performUpload(
       atomic: true,
     };
   } catch (caught) {
-    await rm(temporary, { force: true }).catch(() => undefined);
+    if (temporary) await rm(temporary, { force: true }).catch(() => undefined);
     if (dependencies.isCanceled?.()) {
       throw new FileUploadError("upload_canceled", "upload canceled");
     }
     throw caught;
   } finally {
     if (cancelTimer) clearInterval(cancelTimer);
+    await releaseUploadLease(lease);
   }
 }
 
@@ -471,9 +655,11 @@ function startActiveUpload(
   prepared: PreparedUpload,
   dependencies: UploadDependencies,
   jobId?: string,
+  preAcquiredLease?: UploadLease,
 ): { promise: Promise<UploadFileResult>; deduplicated: boolean; jobId?: string } {
   const active = activeUploads.get(prepared.destination);
   if (active) {
+    if (preAcquiredLease) void releaseUploadLease(preAcquiredLease);
     if (active.expectedSha256 !== prepared.expectedSha256) {
       throw new FileUploadError(
         "upload_in_progress",
@@ -484,7 +670,15 @@ function startActiveUpload(
   }
 
   let promise!: Promise<UploadFileResult>;
-  promise = performUpload(prepared, dependencies).finally(() => {
+  promise = (async () => {
+    const leaseResult = preAcquiredLease
+      ? { lease: preAcquiredLease }
+      : await acquireUploadLease(prepared, { allowExistingJob: false });
+    if (!leaseResult.lease) {
+      throw new FileUploadError("upload_in_progress", "upload destination is already active");
+    }
+    return performUpload(prepared, dependencies, leaseResult.lease);
+  })().finally(() => {
     const current = activeUploads.get(prepared.destination);
     if (current?.promise === promise) activeUploads.delete(prepared.destination);
   });
@@ -500,6 +694,7 @@ export async function uploadFile(
   input: UploadFileInput,
   dependencies: UploadDependencies = {},
 ): Promise<UploadFileResult> {
+  await loadPersisted();
   const prepared = prepareUpload(input);
   const active = startActiveUpload(prepared, dependencies);
   const result = await active.promise;
@@ -531,9 +726,7 @@ function startUploadJob(prepared: PreparedUpload, requestedMode: UploadExecution
       requestedMode,
       effectiveMode: "async",
       routingReason:
-        requestedMode === "async"
-          ? "explicit_async_upload"
-          : "connector_download_auto_routed_async",
+        requestedMode === "async" ? "explicit_async_upload" : "upload_auto_routed_async",
       autoRouted: requestedMode !== "async",
     },
   });
@@ -643,6 +836,7 @@ async function queueUploadFile(
   requestedMode: UploadExecutionMode,
   dependencies: UploadDependencies,
 ): Promise<QueuedUploadResult | UploadFileResult> {
+  await loadPersisted();
   const prepared = prepareUpload(input);
   const existing = activeUploads.get(prepared.destination);
   if (existing) {
@@ -661,7 +855,23 @@ async function queueUploadFile(
     return queueResult(existing.jobId, prepared, true);
   }
 
+  const leaseResult = await acquireUploadLease(prepared, { allowExistingJob: true });
+  if (leaseResult.existingJobId) {
+    return queueResult(leaseResult.existingJobId, prepared, true);
+  }
+  if (!leaseResult.lease) {
+    throw new FileUploadError("upload_lock_failed", "failed to reserve upload destination");
+  }
+
   const job = startUploadJob(prepared, requestedMode);
+  try {
+    await flushJobPersistence(job.jobId);
+    await bindUploadLease(leaseResult.lease, job.jobId);
+  } catch (caught) {
+    await releaseUploadLease(leaseResult.lease);
+    void settleUploadJob(job.jobId, Promise.reject(caught));
+    throw caught;
+  }
   let lastProgressAt = 0;
   let lastProgressBytes = BigInt(0);
   const active = startActiveUpload(
@@ -692,6 +902,7 @@ async function queueUploadFile(
       },
     },
     job.jobId,
+    leaseResult.lease,
   );
   void settleUploadJob(job.jobId, active.promise);
   return queueResult(job.jobId, prepared, false);
@@ -706,15 +917,13 @@ export async function handleFileUploadMcpTool(
   try {
     const mode = validateMode(args.mode);
     const file = args.file as FileUploadSource;
-    const source = resolveSource(file);
     const input: UploadFileInput = {
       file,
       destination: args.destination as string,
       sha256: args.sha256 as string,
       mode,
     };
-    const shouldQueue =
-      mode === "async" || (mode === "auto" && source.kind === "connector_download");
+    const shouldQueue = mode !== "sync";
     const payload = shouldQueue
       ? await queueUploadFile(input, mode, dependencies)
       : await uploadFile(input, dependencies);
