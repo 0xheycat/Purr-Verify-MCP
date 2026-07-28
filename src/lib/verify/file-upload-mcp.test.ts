@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,8 +7,9 @@ import {
   FILE_UPLOAD_MCP_TOOLS,
   handleFileUploadMcpTool,
   uploadFile,
+  uploadLockPath,
 } from "./file-upload-mcp";
-import { getJob } from "./store";
+import { getJob, getRuntime } from "./store";
 
 const roots: string[] = [];
 
@@ -67,6 +68,7 @@ describe("binary connector file upload", () => {
       file: source,
       destination,
       sha256: sha256(bytes),
+      mode: "sync",
     });
 
     expect(result).toMatchObject({
@@ -84,11 +86,37 @@ describe("binary connector file upload", () => {
     expect(await readFile(destination)).toEqual(bytes);
   });
 
+  test("auto-routes mounted local files to a durable job", async () => {
+    const root = await tempRoot();
+    const source = join(root, "large-local.bin");
+    const destination = join(root, "copied-local.bin");
+    const bytes = randomBytes(2 * 1024 * 1024 + 19);
+    await writeFile(source, bytes);
+
+    const result = await handleFileUploadMcpTool("purr_upload_file", {
+      file: source,
+      destination,
+      sha256: sha256(bytes),
+    });
+    const payload = result.payload as { jobId: string; status: string };
+
+    expect(result.handled).toBe(true);
+    expect(payload.status).toBe("running");
+    const job = await waitForTerminalJob(payload.jobId);
+    expect(job.status).toBe("success");
+    expect(job.execution).toMatchObject({
+      effectiveMode: "async",
+      routingReason: "upload_auto_routed_async",
+      autoRouted: true,
+    });
+    expect(await readFile(destination)).toEqual(bytes);
+  });
+
   test("streams a connector download object without persisting its signed URL", async () => {
     const root = await tempRoot();
     const destination = join(root, "downloaded.bin");
     const bytes = randomBytes(65_537);
-    const signedUrl = "https://files.example.test/private-token-value";
+    const signedUrl = "https://files.example.test/signed-reference-a";
 
     const result = await uploadFile(
       {
@@ -103,8 +131,9 @@ describe("binary connector file upload", () => {
         sha256: sha256(bytes),
       },
       {
-        fetchImpl: (async (url) => {
+        fetchImpl: (async (url, init) => {
           expect(String(url)).toBe(signedUrl);
+          expect(new Headers(init?.headers).get("accept-encoding")).toBe("identity");
           return new Response(bytes, { status: 200 });
         }) as typeof fetch,
       },
@@ -117,7 +146,7 @@ describe("binary connector file upload", () => {
       sourceKind: "connector_download",
       sourceName: "payload.bin",
     });
-    expect(JSON.stringify(result)).not.toContain("private-token-value");
+    expect(JSON.stringify(result)).not.toContain("signed-reference-a");
     expect(await readFile(destination)).toEqual(bytes);
   });
 
@@ -145,7 +174,7 @@ describe("binary connector file upload", () => {
     }) as unknown as typeof fetch;
     const input = {
       file: {
-        download_url: "https://files.example.test/retry-token",
+        download_url: "https://files.example.test/retry-reference",
         name: "retry.bin",
       },
       destination,
@@ -176,7 +205,7 @@ describe("binary connector file upload", () => {
     const result = await uploadFile(
       {
         file: {
-          download_url: "https://files.example.test/unused-token",
+          download_url: "https://files.example.test/unused-reference",
           name: "existing.bin",
         },
         destination,
@@ -201,7 +230,7 @@ describe("binary connector file upload", () => {
     const root = await tempRoot();
     const destination = join(root, "async.bin");
     const bytes = randomBytes(192 * 1024 + 31);
-    const signedUrl = "https://files.example.test/async-private-token";
+    const signedUrl = "https://files.example.test/signed-reference-b";
     let fetchCalls = 0;
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -249,8 +278,78 @@ describe("binary connector file upload", () => {
     expect(fetchCalls).toBe(1);
     expect(job.status).toBe("success");
     expect(job.summary.passed).toBe(true);
-    expect(JSON.stringify(job)).not.toContain("async-private-token");
+    expect(JSON.stringify(job)).not.toContain("signed-reference-b");
     expect(await readFile(destination)).toEqual(bytes);
+  });
+
+  test("reclaims an interrupted process lock without waiting for a fixed stale timeout", async () => {
+    const root = await tempRoot();
+    const source = join(root, "source.bin");
+    const destination = join(root, "recovered.bin");
+    const bytes = randomBytes(128 * 1024 + 7);
+    await writeFile(source, bytes);
+    await writeFile(
+      uploadLockPath(destination),
+      JSON.stringify({
+        version: 1,
+        token: randomUUID(),
+        expectedSha256: sha256(bytes),
+        jobId: "interrupted-upload-job",
+        pid: 2_147_483_647,
+        acquiredAt: new Date().toISOString(),
+      }),
+    );
+
+    const result = await handleFileUploadMcpTool("purr_upload_file", {
+      file: source,
+      destination,
+      sha256: sha256(bytes),
+    });
+    const payload = result.payload as { jobId: string };
+    const job = await waitForTerminalJob(payload.jobId);
+
+    expect(job.status).toBe("success");
+    expect(await readFile(destination)).toEqual(bytes);
+    expect(await readFile(uploadLockPath(destination)).then(() => true).catch(() => false)).toBe(
+      false,
+    );
+  });
+
+  test("cancellation aborts the stream and releases destination ownership", async () => {
+    const root = await tempRoot();
+    const destination = join(root, "canceled.bin");
+    const bytes = randomBytes(256 * 1024);
+    const fetchImpl = (async (_url, init) =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(bytes.subarray(0, 64 * 1024));
+            init?.signal?.addEventListener("abort", () => controller.error(new Error("aborted")));
+          },
+        }),
+        { status: 200 },
+      )) as typeof fetch;
+
+    const result = await handleFileUploadMcpTool(
+      "purr_upload_file",
+      {
+        file: { download_url: "https://files.example.test/cancel", name: "cancel.bin" },
+        destination,
+        sha256: sha256(bytes),
+      },
+      { fetchImpl },
+    );
+    const payload = result.payload as { jobId: string };
+    const runtime = getRuntime(payload.jobId);
+    expect(runtime).toBeTruthy();
+    if (runtime) runtime.cancelRequested = true;
+
+    const job = await waitForTerminalJob(payload.jobId);
+    expect(job.status).toBe("canceled");
+    expect(await readFile(destination).then(() => true).catch(() => false)).toBe(false);
+    expect(await readFile(uploadLockPath(destination)).then(() => true).catch(() => false)).toBe(
+      false,
+    );
   });
 
   test("rejects a conflicting hash while another upload owns the destination", async () => {
@@ -327,6 +426,7 @@ describe("binary connector file upload", () => {
       file: source,
       destination,
       sha256: "0".repeat(64),
+      mode: "sync",
     });
 
     expect(result).toMatchObject({
