@@ -7,8 +7,8 @@ import {
   FILE_UPLOAD_MCP_TOOLS,
   handleFileUploadMcpTool,
   uploadFile,
-import { getJob } from "./store";
 } from "./file-upload-mcp";
+import { getJob } from "./store";
 
 const roots: string[] = [];
 
@@ -25,6 +25,7 @@ async function tempRoot(): Promise<string> {
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
+
 async function waitForTerminalJob(jobId: string) {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     const job = getJob(jobId);
@@ -33,7 +34,6 @@ async function waitForTerminalJob(jobId: string) {
   }
   throw new Error(`upload job did not finish: ${jobId}`);
 }
-
 
 describe("binary connector file upload", () => {
   test("exposes one file-bound mutation tool without format or size caps", () => {
@@ -48,8 +48,8 @@ describe("binary connector file upload", () => {
       _meta: { "openai/fileParams": ["file"] },
     });
     const schema = JSON.stringify(FILE_UPLOAD_MCP_TOOLS[0].inputSchema);
-    expect(schema).toContain('"enum":["auto","sync","async"]');
     expect(schema).toContain('"required":["file","destination","sha256"]');
+    expect(schema).toContain('"enum":["auto","sync","async"]');
     expect(schema).not.toMatch(/maxLength|maximum|maxBytes|mimeTypes|extensions/);
   });
 
@@ -120,6 +120,7 @@ describe("binary connector file upload", () => {
     expect(JSON.stringify(result)).not.toContain("private-token-value");
     expect(await readFile(destination)).toEqual(bytes);
   });
+
   test("deduplicates concurrent identical retries into one connector download", async () => {
     const root = await tempRoot();
     const destination = join(root, "deduplicated.bin");
@@ -312,7 +313,6 @@ describe("binary connector file upload", () => {
     expect(job.status).toBe("success");
     expect(await readFile(destination)).toEqual(replacement);
   });
-
 
   test("leaves an existing destination unchanged when sha256 does not match", async () => {
     const root = await tempRoot();
