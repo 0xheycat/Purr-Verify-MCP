@@ -4,6 +4,7 @@ import { lstat, mkdir, open, readdir, rename, rm } from "node:fs/promises";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { fileURLToPath } from "node:url";
 import {
   clearRuntime,
   createJob,
@@ -13,7 +14,6 @@ import {
   updateJob,
 } from "./store";
 import type { Job } from "./types";
-import { fileURLToPath } from "node:url";
 
 export interface FileUploadMcpToolDefinition {
   name: string;
@@ -46,14 +46,14 @@ export interface ConnectorFileReference {
   mounted_path?: string;
 }
 
-export type UploadExecutionMode = "auto" | "sync" | "async";
 export type FileUploadSource = string | ConnectorFileReference;
+export type UploadExecutionMode = "auto" | "sync" | "async";
 
 export interface UploadFileInput {
   file: FileUploadSource;
   destination: string;
-  mode?: UploadExecutionMode;
   sha256: string;
+  mode?: UploadExecutionMode;
 }
 
 export interface UploadFileResult {
@@ -63,6 +63,7 @@ export interface UploadFileResult {
   replaced: boolean;
   sourceKind: "local" | "connector_download";
   sourceName: string | null;
+  atomic: true;
   reusedExisting?: boolean;
   deduplicated?: boolean;
 }
@@ -78,13 +79,12 @@ export interface QueuedUploadResult {
   statusTool: "purr_get_job_status";
   logsTool: "purr_get_job_logs";
   cancelTool: "purr_cancel_job";
-  atomic: true;
 }
 
 interface UploadDependencies {
+  fetchImpl?: typeof fetch;
   onProgress?: (bytesWritten: bigint) => void;
   isCanceled?: () => boolean;
-  fetchImpl?: typeof fetch;
 }
 
 class FileUploadError extends Error {
@@ -161,6 +161,7 @@ function resolveSource(file: FileUploadSource):
   }
   return { kind: "connector_download", url: parsed.toString(), name };
 }
+
 type ResolvedUploadSource = ReturnType<typeof resolveSource>;
 
 interface PreparedUpload {
@@ -254,7 +255,6 @@ export const FILE_UPLOAD_MCP_TOOLS: FileUploadMcpToolDefinition[] = [
   },
 ];
 
-
 function validateDestination(value: unknown): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new FileUploadError("invalid_destination", "destination is required");
@@ -272,6 +272,7 @@ function validateSha256(value: unknown): string {
   }
   return value.trim().toLowerCase();
 }
+
 function validateMode(value: unknown): UploadExecutionMode {
   if (value === undefined || value === null || value === "") return "auto";
   if (value === "auto" || value === "sync" || value === "async") return value;
@@ -290,11 +291,10 @@ function bytesValue(bytes: bigint): number | string {
   return bytes <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(bytes) : bytes.toString();
 }
 
-
 async function sourceStream(
   source: ResolvedUploadSource,
-  signal?: AbortSignal,
   fetchImpl: typeof fetch,
+  signal?: AbortSignal,
 ): Promise<Readable> {
   if (source.kind === "local") return createReadStream(source.path);
 
@@ -328,6 +328,7 @@ async function existingFileMode(destination: string): Promise<{
     throw caught;
   }
 }
+
 async function hashFile(path: string): Promise<{ sha256: string; bytes: bigint }> {
   const hash = createHash("sha256");
   let bytes = BigInt(0);
@@ -377,7 +378,6 @@ async function cleanupTemporaryFiles(destination: string): Promise<void> {
   );
 }
 
-
 async function syncPath(path: string): Promise<void> {
   const handle = await open(path, "r");
   try {
@@ -399,6 +399,7 @@ async function performUpload(
   const current = await existingFileMode(prepared.destination);
   const temporary = `${parent}/.${basename(prepared.destination)}.purr-upload-${randomUUID()}.tmp`;
   const hash = createHash("sha256");
+  let bytes = BigInt(0);
   const abortController = new AbortController();
   const cancelTimer = dependencies.isCanceled
     ? setInterval(() => {
@@ -406,18 +407,17 @@ async function performUpload(
       }, 250)
     : null;
   cancelTimer?.unref?.();
-  let bytes = BigInt(0);
 
   const meter = new Transform({
+    transform(chunk, _encoding, callback) {
       if (dependencies.isCanceled?.()) {
         callback(new FileUploadError("upload_canceled", "upload canceled"));
         return;
       }
-    transform(chunk, _encoding, callback) {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       hash.update(buffer);
-      dependencies.onProgress?.(bytes);
       bytes += BigInt(buffer.byteLength);
+      dependencies.onProgress?.(bytes);
       callback(null, buffer);
     },
   });
@@ -457,15 +457,16 @@ async function performUpload(
       atomic: true,
     };
   } catch (caught) {
+    await rm(temporary, { force: true }).catch(() => undefined);
     if (dependencies.isCanceled?.()) {
       throw new FileUploadError("upload_canceled", "upload canceled");
     }
-    await rm(temporary, { force: true }).catch(() => undefined);
+    throw caught;
   } finally {
     if (cancelTimer) clearInterval(cancelTimer);
-    throw caught;
   }
 }
+
 function startActiveUpload(
   prepared: PreparedUpload,
   dependencies: UploadDependencies,
@@ -696,11 +697,10 @@ async function queueUploadFile(
   return queueResult(job.jobId, prepared, false);
 }
 
-
 export async function handleFileUploadMcpTool(
   name: string | undefined,
-  dependencies: UploadDependencies = {},
   args: Record<string, unknown>,
+  dependencies: UploadDependencies = {},
 ): Promise<FileUploadMcpToolResult> {
   if (name !== "purr_upload_file") return { handled: false };
   try {
