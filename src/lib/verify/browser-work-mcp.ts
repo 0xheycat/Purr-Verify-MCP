@@ -4,6 +4,12 @@ import {
   type BrowserWorkMode,
   type BrowserWorkStartInput,
 } from "./browser-work";
+import {
+  browserWorkArtifactResourceLink,
+  listBrowserWorkArtifactLinks,
+  type BrowserWorkResourceLink,
+} from "./browser-work-resource";
+import { transcodeBrowserScreenshot } from "./browser-work-media";
 import { classifyDestructiveCommand } from "./operator-runtime";
 
 export interface BrowserWorkMcpToolDefinition {
@@ -43,6 +49,81 @@ const SIDE_EFFECTING = {
 const SESSION_ID = {
   type: "string",
   description: "Work-session identifier returned by purr_work_session_start.",
+};
+
+const NON_EVAL_ACTION_TYPES = [
+  "click",
+  "doubleClick",
+  "hover",
+  "fill",
+  "type",
+  "check",
+  "select",
+  "drag",
+  "press",
+  "keyDown",
+  "keyUp",
+  "scroll",
+  "wait",
+  "sleep",
+  "navigate",
+  "reload",
+  "move",
+  "annotate",
+  "clearAnnotations",
+];
+
+const BROWSER_ACTION_SCHEMA = {
+  oneOf: [
+    {
+      type: "object",
+      properties: {
+        type: { const: "eval" },
+        js: { type: "string", minLength: 1 },
+        settleMs: { type: "number", minimum: 0 },
+      },
+      required: ["type", "js"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        op: { const: "eval" },
+        js: { type: "string", minLength: 1 },
+        settleMs: { type: "number", minimum: 0 },
+      },
+      required: ["op", "js"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        type: { type: "string", enum: NON_EVAL_ACTION_TYPES },
+        op: { type: "string", enum: NON_EVAL_ACTION_TYPES },
+        selector: {
+          type: "string",
+          description: "CSS, text, role, label, placeholder, test-id, or xpath selector supported by Pursr.",
+        },
+        timeoutMs: {
+          type: "number",
+          minimum: 0,
+          description: "Per-action timeout forwarded to Pursr and Playwright.",
+        },
+        force: {
+          type: "boolean",
+          description: "Explicitly bypass Playwright actionability checks for selector actions. Never enabled automatically.",
+        },
+        text: { type: "string" },
+        value: {},
+        checked: { type: "boolean" },
+        x: { type: "number" },
+        y: { type: "number" },
+        settleMs: { type: "number", minimum: 0 },
+      },
+      anyOf: [{ required: ["type"] }, { required: ["op"] }],
+      additionalProperties: true,
+    },
+  ],
 };
 
 export const BROWSER_WORK_MCP_TOOLS: BrowserWorkMcpToolDefinition[] = [
@@ -145,12 +226,12 @@ export const BROWSER_WORK_MCP_TOOLS: BrowserWorkMcpToolDefinition[] = [
   {
     name: "purr_work_session_act",
     description:
-      "Perform a small ordered Pursr action sequence in the persistent browser. Supports selectors, coordinates, click, hover, fill, type, drag, keys, scroll, navigation, reload, eval, cursor movement, and annotations.",
+      "Perform a small ordered Pursr action sequence in the persistent browser. Eval actions require a non-empty js field; other actions support selectors, coordinates, click, hover, fill, type, drag, keys, scroll, navigation, reload, cursor movement, and annotations.",
     inputSchema: {
       type: "object",
       properties: {
         sessionId: SESSION_ID,
-        actions: { type: "array", minItems: 1, items: { type: "object" } },
+        actions: { type: "array", minItems: 1, items: BROWSER_ACTION_SCHEMA },
       },
       required: ["sessionId", "actions"],
     },
@@ -159,14 +240,52 @@ export const BROWSER_WORK_MCP_TOOLS: BrowserWorkMcpToolDefinition[] = [
   {
     name: "purr_work_session_screenshot",
     description:
-      "Capture the current persistent browser state and return the PNG directly to the model, with a server-side artifact path.",
+      "Capture the current persistent browser state, return image pixels directly to the model, and publish a readable browser artifact. PNG is the default; JPEG, WebP, GIF, AVIF, TIFF, and other Sharp-supported image formats may be requested without changing the browser workflow.",
     inputSchema: {
       type: "object",
       properties: {
         sessionId: SESSION_ID,
-        out: { type: "string" },
+        out: {
+          type: "string",
+          description: "Optional requested copy path. A managed artifact is always retained for MCP resource delivery.",
+        },
         full: { type: "boolean", default: false },
         selector: { type: "string" },
+        format: {
+          type: "string",
+          description: "Output image format. Common values include PNG, JPEG/JPG, WebP, GIF, AVIF, and TIFF.",
+        },
+        quality: {
+          type: "number",
+          description: "Optional encoder quality. Values are softly clamped to 1-100 instead of rejecting the operation.",
+        },
+        timeoutMs: {
+          type: "number",
+          description: "Optional browser capture timeout forwarded to Pursr when supported.",
+        },
+        includeAttachments: {
+          type: "boolean",
+          default: false,
+          description: "Opt in to MCP resource-link attachments. Default false keeps image pixels inline and avoids ChatGPT file-materialization approval prompts.",
+        },
+      },
+      required: ["sessionId"],
+    },
+    annotations: READ_ONLY,
+  },
+  {
+    name: "purr_work_session_artifacts",
+    description:
+      "List metadata for every regular browser-session artifact, including PNG, JPEG, WebP, GIF, WebM, MP4, audio, PDFs, and unknown binary formats. Set includeAttachments=true only when MCP resource-link attachments are explicitly wanted. No extension whitelist is applied; artifacts remain bounded to the managed browser-work directory.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: SESSION_ID,
+        includeAttachments: {
+          type: "boolean",
+          default: false,
+          description: "Opt in to MCP resource-link attachments. Default false avoids ChatGPT file-materialization approval prompts.",
+        },
       },
       required: ["sessionId"],
     },
@@ -197,10 +316,17 @@ export const BROWSER_WORK_MCP_TOOLS: BrowserWorkMcpToolDefinition[] = [
   {
     name: "purr_work_session_close",
     description:
-      "Close the Pursr browser session, finalize any browser video, and terminate the managed dev-server process tree.",
+      "Close the Pursr browser session, finalize any browser video, and terminate the managed dev-server process tree. Final video metadata is returned by default; set includeAttachments=true only when a resource-link attachment is explicitly wanted.",
     inputSchema: {
       type: "object",
-      properties: { sessionId: SESSION_ID },
+      properties: {
+        sessionId: SESSION_ID,
+        includeAttachments: {
+          type: "boolean",
+          default: false,
+          description: "Opt in to a finalized-video resource-link attachment. Default false avoids ChatGPT file-materialization approval prompts.",
+        },
+      },
       required: ["sessionId"],
     },
     annotations: SIDE_EFFECTING,
@@ -230,12 +356,34 @@ function objectArray(value: unknown): Array<Record<string, unknown>> | undefined
   return items.length === value.length ? items : undefined;
 }
 
+function artifactMetadata(link: BrowserWorkResourceLink | undefined): Record<string, unknown> | undefined {
+  if (!link) return undefined;
+  return {
+    uri: link.uri,
+    name: link.name,
+    title: link.title,
+    description: link.description,
+    mimeType: link.mimeType,
+    size: link.size,
+  };
+}
+
 function error(message: string, extra: Record<string, unknown> = {}): BrowserWorkMcpToolResult {
   return {
     handled: true,
     isError: true,
     payload: { error: "browser_work_failed", message, ...extra },
   };
+}
+
+function validateActions(actions: Array<Record<string, unknown>>): BrowserWorkMcpToolResult | undefined {
+  for (const [actionIndex, action] of actions.entries()) {
+    const operation = stringValue(action.type) ?? stringValue(action.op);
+    if (operation === "eval" && !stringValue(action.js)) {
+      return error("eval action requires non-empty js", { actionIndex });
+    }
+  }
+  return undefined;
 }
 
 export async function handleBrowserWorkMcpTool(
@@ -324,20 +472,75 @@ export async function handleBrowserWorkMcpTool(
     if (name === "purr_work_session_act") {
       const actions = objectArray(args.actions);
       if (!actions?.length) return error("actions must be an array of objects");
+      const validationError = validateActions(actions);
+      if (validationError) return validationError;
       return { handled: true, payload: await manager.act(sessionId!, actions) };
     }
     if (name === "purr_work_session_screenshot") {
-      const result = await manager.screenshot(sessionId!, {
-        out: stringValue(args.out),
+      const status = manager.status(sessionId!);
+      const outputDir = stringValue(status.outputDir);
+      if (!outputDir) return error("browser work session has no artifact directory");
+      const raw = await manager.screenshot(sessionId!, {
         full: args.full === true,
         selector: stringValue(args.selector),
+        timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : undefined,
       });
+      const result = await transcodeBrowserScreenshot(raw, {
+        format: stringValue(args.format),
+        quality: typeof args.quality === "number" ? args.quality : undefined,
+        out: stringValue(args.out),
+        outputDir,
+      });
+      const resourceLink = browserWorkArtifactResourceLink(
+        result.metadata,
+        result.data,
+        result.mimeType,
+      );
+      const payload = {
+        ...result.metadata,
+        ...(resourceLink ? { artifact: artifactMetadata(resourceLink) } : {}),
+      };
       return {
         handled: true,
-        payload: result.metadata,
+        payload,
         content: [
-          { type: "text", text: JSON.stringify(result.metadata, null, 2) },
-          { type: "image", data: result.data, mimeType: result.mimeType },
+          { type: "text", text: JSON.stringify(payload, null, 2) },
+          {
+            type: "image",
+            data: result.data,
+            mimeType: result.mimeType,
+            annotations: { audience: ["assistant", "user"], priority: 1 },
+          },
+          ...(args.includeAttachments === true && resourceLink ? [resourceLink] : []),
+        ],
+      };
+    }
+    if (name === "purr_work_session_artifacts") {
+      const status = manager.status(sessionId!);
+      const outputDir = stringValue(status.outputDir);
+      if (!outputDir) return error("browser work session has no artifact directory");
+      const links = await listBrowserWorkArtifactLinks({
+        sessionId,
+        outputDir,
+        url: status.url,
+      });
+      const payload = {
+        sessionId,
+        outputDir,
+        count: links.length,
+        artifacts: links.map(({ uri, name: artifactName, mimeType, size }) => ({
+          uri,
+          name: artifactName,
+          mimeType,
+          size,
+        })),
+      };
+      return {
+        handled: true,
+        payload,
+        content: [
+          { type: "text", text: JSON.stringify(payload, null, 2) },
+          ...(args.includeAttachments === true ? links : []),
         ],
       };
     }
@@ -351,7 +554,31 @@ export async function handleBrowserWorkMcpTool(
       return { handled: true, payload: manager.diagnostics(sessionId!, args.clear === true) };
     }
     if (name === "purr_work_session_close") {
-      return { handled: true, payload: await manager.close(sessionId!) };
+      const status = manager.status(sessionId!);
+      const payload = await manager.close(sessionId!);
+      const browser = payload && typeof payload === "object" && !Array.isArray(payload)
+        ? (payload as { browser?: unknown }).browser
+        : undefined;
+      const video = browser && typeof browser === "object" && !Array.isArray(browser)
+        ? stringValue((browser as { video?: unknown }).video)
+        : undefined;
+      const videoLink = video
+        ? browserWorkArtifactResourceLink({ sessionId, out: video, url: status.url })
+        : undefined;
+      const responsePayload = payload && typeof payload === "object" && !Array.isArray(payload)
+        ? {
+            ...(payload as Record<string, unknown>),
+            ...(videoLink ? { videoArtifact: artifactMetadata(videoLink) } : {}),
+          }
+        : payload;
+      return {
+        handled: true,
+        payload: responsePayload,
+        content: [
+          { type: "text", text: JSON.stringify(responsePayload, null, 2) },
+          ...(args.includeAttachments === true && videoLink ? [videoLink] : []),
+        ],
+      };
     }
     return { handled: false };
   } catch (caught) {

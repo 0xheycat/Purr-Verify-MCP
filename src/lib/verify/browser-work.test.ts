@@ -44,12 +44,100 @@ describe("Pursr browser work sessions", () => {
       "purr_work_session_snapshot",
       "purr_work_session_act",
       "purr_work_session_screenshot",
+      "purr_work_session_artifacts",
       "purr_work_session_inspect",
       "purr_work_session_diagnostics",
       "purr_work_session_close",
     ]);
     expect(BROWSER_WORK_MCP_TOOLS.find((tool) => tool.name === "purr_work_session_act")?.annotations.destructiveHint).toBe(true);
     expect(BROWSER_WORK_MCP_TOOLS.find((tool) => tool.name === "purr_browser_doctor")?.annotations.readOnlyHint).toBe(true);
+  });
+
+  test("publishes flexible visual output controls without a PNG-only contract", () => {
+    const screenshotTool = BROWSER_WORK_MCP_TOOLS.find(
+      (tool) => tool.name === "purr_work_session_screenshot",
+    );
+    const artifactsTool = BROWSER_WORK_MCP_TOOLS.find(
+      (tool) => tool.name === "purr_work_session_artifacts",
+    );
+    const closeTool = BROWSER_WORK_MCP_TOOLS.find(
+      (tool) => tool.name === "purr_work_session_close",
+    );
+    const screenshotSchema = screenshotTool?.inputSchema as {
+      properties?: Record<string, { type?: string; description?: string; default?: unknown }>;
+    };
+    const artifactsSchema = artifactsTool?.inputSchema as {
+      properties?: Record<string, { type?: string; description?: string; default?: unknown }>;
+    };
+    const closeSchema = closeTool?.inputSchema as {
+      properties?: Record<string, { type?: string; description?: string; default?: unknown }>;
+    };
+
+    expect(screenshotSchema.properties?.format?.type).toBe("string");
+    expect(screenshotSchema.properties?.quality?.type).toBe("number");
+    expect(screenshotSchema.properties?.format?.description).toContain("PNG");
+    expect(screenshotSchema.properties?.format?.description).toContain("GIF");
+    expect(screenshotSchema.properties?.includeAttachments).toMatchObject({
+      type: "boolean",
+      default: false,
+    });
+    expect(screenshotSchema.properties?.includeAttachments?.description).toContain("materialization");
+    expect(artifactsSchema.properties?.includeAttachments).toMatchObject({
+      type: "boolean",
+      default: false,
+    });
+    expect(closeSchema.properties?.includeAttachments).toMatchObject({
+      type: "boolean",
+      default: false,
+    });
+    expect(artifactsTool?.annotations.readOnlyHint).toBe(true);
+  });
+
+  test("publishes explicit selector timeout and force controls without automatic force", () => {
+    const actTool = BROWSER_WORK_MCP_TOOLS.find(
+      (tool) => tool.name === "purr_work_session_act",
+    );
+    const variants = ((actTool?.inputSchema as {
+      properties?: { actions?: { items?: { oneOf?: Array<Record<string, unknown>> } } };
+    }).properties?.actions?.items?.oneOf ?? []) as Array<{
+      properties?: Record<string, { type?: string; description?: string; minimum?: number }>;
+    }>;
+    const selectorVariant = variants.find((variant) => variant.properties?.force);
+
+    expect(selectorVariant?.properties?.timeoutMs).toMatchObject({ type: "number", minimum: 0 });
+    expect(selectorVariant?.properties?.force?.type).toBe("boolean");
+    expect(selectorVariant?.properties?.force?.description).toContain("Never enabled automatically");
+  });
+
+  test("publishes a typed eval action contract that requires non-empty js", () => {
+    const actTool = BROWSER_WORK_MCP_TOOLS.find(
+      (tool) => tool.name === "purr_work_session_act",
+    );
+    const inputSchema = actTool?.inputSchema as {
+      properties?: {
+        actions?: {
+          items?: {
+            oneOf?: Array<{
+              properties?: {
+                type?: { const?: string };
+                js?: { type?: string; minLength?: number };
+              };
+              required?: string[];
+              additionalProperties?: boolean;
+            }>;
+          };
+        };
+      };
+    };
+    const variants = inputSchema.properties?.actions?.items?.oneOf;
+
+    expect(Array.isArray(variants)).toBe(true);
+    const evalAction = variants?.find(
+      (variant) => variant.properties?.type?.const === "eval",
+    );
+    expect(evalAction?.required).toContain("js");
+    expect(evalAction?.properties?.js).toEqual({ type: "string", minLength: 1 });
+    expect(evalAction?.additionalProperties).toBe(false);
   });
 
   test("injects the installed Playwright driver into Pursr sessions", async () => {
@@ -265,6 +353,84 @@ describe("Pursr browser work sessions", () => {
         classification: "recursive_force_delete",
       },
     });
+  });
+
+  test("rejects eval without non-empty js before invoking Pursr", async () => {
+    const result = await handleBrowserWorkMcpTool("purr_work_session_act", {
+      sessionId: "missing-session",
+      actions: [{ type: "eval", script: "({ answer: 42 })" }],
+    });
+
+    expect(result).toMatchObject({
+      handled: true,
+      isError: true,
+      payload: {
+        error: "browser_work_failed",
+        message: "eval action requires non-empty js",
+        actionIndex: 0,
+      },
+    });
+  });
+
+  test("adds a readable resource link only when screenshot attachments are explicitly requested", async () => {
+    const state = globalThis as typeof globalThis & {
+      __purrBrowserWorkManager?: {
+        status: (sessionId: string) => { outputDir: string; url: string };
+        screenshot: (sessionId: string) => Promise<{
+          metadata: Record<string, unknown>;
+          data: string;
+          mimeType: string;
+        }>;
+      };
+    };
+    const previousManager = state.__purrBrowserWorkManager;
+    const previousDataDir = process.env.VERIFY_DATA_DIR;
+    process.env.VERIFY_DATA_DIR = "/tmp/purr-resource-contract";
+    state.__purrBrowserWorkManager = {
+      status: (sessionId: string) => ({
+        outputDir: `/tmp/purr-resource-contract/browser-work/${sessionId}`,
+        url: "http://127.0.0.1:3000/",
+      }),
+      screenshot: async (sessionId: string) => ({
+        metadata: {
+          sessionId,
+          browserSessionId: `${sessionId}-browser`,
+          out: `/tmp/purr-resource-contract/browser-work/${sessionId}/shot.png`,
+          url: "http://127.0.0.1:3000/",
+        },
+        data: "cG5n",
+        mimeType: "image/png",
+      }),
+    };
+
+    try {
+      const result = await handleBrowserWorkMcpTool("purr_work_session_screenshot", {
+        sessionId: "resource-contract",
+        includeAttachments: true,
+      });
+      const content = result.content ?? [];
+      expect(content.map((entry) => entry.type)).toEqual([
+        "text",
+        "image",
+        "resource_link",
+      ]);
+      expect(content[2]).toMatchObject({
+        type: "resource_link",
+        name: "shot.png",
+        mimeType: "image/png",
+        size: 3,
+        annotations: {
+          audience: ["assistant", "user"],
+          priority: 1,
+        },
+      });
+      expect(String(content[2]?.uri)).toStartWith("purr://browser-work/");
+    } finally {
+      if (previousManager) state.__purrBrowserWorkManager = previousManager;
+      else delete state.__purrBrowserWorkManager;
+      if (previousDataDir === undefined) delete process.env.VERIFY_DATA_DIR;
+      else process.env.VERIFY_DATA_DIR = previousDataDir;
+    }
   });
 
   test("removes Verify service framework internals from child projects while allowing explicit overrides", () => {
