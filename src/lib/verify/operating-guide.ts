@@ -3,7 +3,7 @@ export const VERIFY_MCP_INSTRUCTIONS =
 
 export const VERIFY_OPERATING_GUIDE = {
   name: "Purr Verify MCP Operating Guide",
-  version: "2026-07-30-visual-artifacts-v1",
+  version: "2026-07-30-visual-operator-v2",
   serverRole:
     "Use this MCP for repository-clone verification, opaque binary connector-file upload, managed local dev-server and Pursr browser work sessions, plus private VPS project discovery, inspection, generic local command execution, exact-tree verification, snapshots, deployment, service restart, health checks, and rollback. All auto-mode uploads route to durable background jobs, use process-safe destination ownership, deduplicate identical retries, preserve bounded progress evidence, and atomically replace the destination only after SHA-256 verification. Operator mutations run as durable asynchronous jobs; self-hosted systemd restarts use an external delayed handoff so the job journal and project lock finalize before the service is replaced. Browser work sessions are explicit live sessions with bounded logs and server-side artifacts. GitHub MCP remains responsible for branches, commits, pull requests, and source-file edits.",
   startupProtocol: [
@@ -39,7 +39,7 @@ export const VERIFY_OPERATING_GUIDE = {
     "Binary upload treats file content as opaque bytes: no extension whitelist, MIME whitelist, or application-level byte cap is applied. Auto mode always uses a durable async job, explicit sync is reserved for short transfers, identical destination+SHA retries reuse one active job across process boundaries, conflicting hashes are rejected while the destination is owned, interrupted locks are reclaimed without a fixed multi-hour wait, and SHA-256 mismatch leaves the previous destination unchanged.",
     "Browser work reuses the Pursr npm package as the browser engine. Do not duplicate its session, action, screenshot, diagnostics, or browser-discovery implementations inside Verify MCP. Media delivery is capability-first: do not add extension or MIME whitelists to managed browser artifacts; preserve authentication, canonical browser-work boundaries, and realpath escape protection instead.",
     "A missing browser degrades a work session to a usable dev-server session with an actionable warning unless browserRequired=true was explicitly requested.",
-    "Browser actions may have external side effects. Inspect current state first and keep action batches small enough to read back the result.",
+    "Browser actions may have external side effects. Inspect current state first and keep action batches small enough to read back the result. Selector actions expose timeoutMs and explicit force=true; force is caller-controlled and is never enabled automatically. Prefer normal actionability when it works, then use explicit force or coordinates when the readback justifies it.",
     "Same-project operations are serialized by canonical cwd while unrelated projects may execute concurrently within the shared job limit. A project lock is reclaimed immediately when its recorded process is gone or its durable owner job is terminal; lock removal always verifies ownership first.",
     "Environment inspection returns key names, source locations, and present or missing state by default. Revealing a value requires explicit requested keys and that response is not stored in history or deployment plans.",
     "Canonical cwd is the project identity for plans and future same-project operation locks; requested and symlink paths remain visible for auditability.",

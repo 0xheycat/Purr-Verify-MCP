@@ -99,6 +99,25 @@ const BROWSER_ACTION_SCHEMA = {
       properties: {
         type: { type: "string", enum: NON_EVAL_ACTION_TYPES },
         op: { type: "string", enum: NON_EVAL_ACTION_TYPES },
+        selector: {
+          type: "string",
+          description: "CSS, text, role, label, placeholder, test-id, or xpath selector supported by Pursr.",
+        },
+        timeoutMs: {
+          type: "number",
+          minimum: 0,
+          description: "Per-action timeout forwarded to Pursr and Playwright.",
+        },
+        force: {
+          type: "boolean",
+          description: "Explicitly bypass Playwright actionability checks for selector actions. Never enabled automatically.",
+        },
+        text: { type: "string" },
+        value: {},
+        checked: { type: "boolean" },
+        x: { type: "number" },
+        y: { type: "number" },
+        settleMs: { type: "number", minimum: 0 },
       },
       anyOf: [{ required: ["type"] }, { required: ["op"] }],
       additionalProperties: true,

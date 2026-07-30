@@ -71,6 +71,22 @@ describe("Pursr browser work sessions", () => {
     expect(artifactsTool?.annotations.readOnlyHint).toBe(true);
   });
 
+  test("publishes explicit selector timeout and force controls without automatic force", () => {
+    const actTool = BROWSER_WORK_MCP_TOOLS.find(
+      (tool) => tool.name === "purr_work_session_act",
+    );
+    const variants = ((actTool?.inputSchema as {
+      properties?: { actions?: { items?: { oneOf?: Array<Record<string, unknown>> } } };
+    }).properties?.actions?.items?.oneOf ?? []) as Array<{
+      properties?: Record<string, { type?: string; description?: string; minimum?: number }>;
+    }>;
+    const selectorVariant = variants.find((variant) => variant.properties?.force);
+
+    expect(selectorVariant?.properties?.timeoutMs).toMatchObject({ type: "number", minimum: 0 });
+    expect(selectorVariant?.properties?.force?.type).toBe("boolean");
+    expect(selectorVariant?.properties?.force?.description).toContain("Never enabled automatically");
+  });
+
   test("publishes a typed eval action contract that requires non-empty js", () => {
     const actTool = BROWSER_WORK_MCP_TOOLS.find(
       (tool) => tool.name === "purr_work_session_act",
