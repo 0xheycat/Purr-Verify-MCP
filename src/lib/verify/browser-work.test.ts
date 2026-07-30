@@ -44,12 +44,31 @@ describe("Pursr browser work sessions", () => {
       "purr_work_session_snapshot",
       "purr_work_session_act",
       "purr_work_session_screenshot",
+      "purr_work_session_artifacts",
       "purr_work_session_inspect",
       "purr_work_session_diagnostics",
       "purr_work_session_close",
     ]);
     expect(BROWSER_WORK_MCP_TOOLS.find((tool) => tool.name === "purr_work_session_act")?.annotations.destructiveHint).toBe(true);
     expect(BROWSER_WORK_MCP_TOOLS.find((tool) => tool.name === "purr_browser_doctor")?.annotations.readOnlyHint).toBe(true);
+  });
+
+  test("publishes flexible visual output controls without a PNG-only contract", () => {
+    const screenshotTool = BROWSER_WORK_MCP_TOOLS.find(
+      (tool) => tool.name === "purr_work_session_screenshot",
+    );
+    const artifactsTool = BROWSER_WORK_MCP_TOOLS.find(
+      (tool) => tool.name === "purr_work_session_artifacts",
+    );
+    const screenshotSchema = screenshotTool?.inputSchema as {
+      properties?: Record<string, { type?: string; description?: string }>;
+    };
+
+    expect(screenshotSchema.properties?.format?.type).toBe("string");
+    expect(screenshotSchema.properties?.quality?.type).toBe("number");
+    expect(screenshotSchema.properties?.format?.description).toContain("PNG");
+    expect(screenshotSchema.properties?.format?.description).toContain("GIF");
+    expect(artifactsTool?.annotations.readOnlyHint).toBe(true);
   });
 
   test("publishes a typed eval action contract that requires non-empty js", () => {
@@ -318,6 +337,7 @@ describe("Pursr browser work sessions", () => {
   test("adds a readable resource link beside inline screenshot image content", async () => {
     const state = globalThis as typeof globalThis & {
       __purrBrowserWorkManager?: {
+        status: (sessionId: string) => { outputDir: string; url: string };
         screenshot: (sessionId: string) => Promise<{
           metadata: Record<string, unknown>;
           data: string;
@@ -329,6 +349,10 @@ describe("Pursr browser work sessions", () => {
     const previousDataDir = process.env.VERIFY_DATA_DIR;
     process.env.VERIFY_DATA_DIR = "/tmp/purr-resource-contract";
     state.__purrBrowserWorkManager = {
+      status: (sessionId: string) => ({
+        outputDir: `/tmp/purr-resource-contract/browser-work/${sessionId}`,
+        url: "http://127.0.0.1:3000/",
+      }),
       screenshot: async (sessionId: string) => ({
         metadata: {
           sessionId,

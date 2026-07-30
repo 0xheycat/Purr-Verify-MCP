@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
 import { VERIFY_MCP_APP_URI } from "@/lib/verify/mcp-app";
-import { browserWorkScreenshotResourceLink } from "@/lib/verify/browser-work-resource";
+import {
+  browserWorkArtifactResourceLink,
+  browserWorkScreenshotResourceLink,
+} from "@/lib/verify/browser-work-resource";
 import { POST } from "./route";
 
 const roots: string[] = [];
@@ -87,6 +90,34 @@ describe("MCP browser screenshot resources", () => {
     const packet = await response.json();
     expect(packet.result).toEqual({
       contents: [{ uri, mimeType: "image/png", blob: bytes.toString("base64") }],
+    });
+  });
+
+  test.each([
+    ["motion.gif", "image/gif", Buffer.from("474946383961", "hex")],
+    ["capture.webm", "video/webm", Buffer.from("1a45dfa3", "hex")],
+    ["visual.custom", "application/octet-stream", Buffer.from("opaque")],
+  ])("returns authenticated %s artifacts without a format whitelist", async (name, mimeType, bytes) => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "purr-route-media-"));
+    roots.push(dataDir);
+    const artifact = path.join(dataDir, "browser-work", "session-media", String(name));
+    await mkdir(path.dirname(artifact), { recursive: true });
+    await writeFile(artifact, bytes);
+    const link = browserWorkArtifactResourceLink(
+      { sessionId: "session-media", out: artifact, url: "http://127.0.0.1:3000/" },
+      undefined,
+      undefined,
+      dataDir,
+    );
+    process.env.AUTH_MODE = "server_token";
+    process.env.VERIFY_TOKEN = "test";
+    process.env.VERIFY_DATA_DIR = dataDir;
+
+    const response = await POST(resourceRequest(link!.uri, "test"));
+    expect(response.status).toBe(200);
+    const packet = await response.json();
+    expect(packet.result).toEqual({
+      contents: [{ uri: link!.uri, mimeType, blob: bytes.toString("base64") }],
     });
   });
 });

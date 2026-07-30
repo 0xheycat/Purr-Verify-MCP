@@ -4,7 +4,11 @@ import {
   type BrowserWorkMode,
   type BrowserWorkStartInput,
 } from "./browser-work";
-import { browserWorkScreenshotResourceLink } from "./browser-work-resource";
+import {
+  browserWorkArtifactResourceLink,
+  listBrowserWorkArtifactLinks,
+} from "./browser-work-resource";
+import { transcodeBrowserScreenshot } from "./browser-work-media";
 import { classifyDestructiveCommand } from "./operator-runtime";
 
 export interface BrowserWorkMcpToolDefinition {
@@ -216,15 +220,41 @@ export const BROWSER_WORK_MCP_TOOLS: BrowserWorkMcpToolDefinition[] = [
   {
     name: "purr_work_session_screenshot",
     description:
-      "Capture the current persistent browser state and return the PNG directly to the model, with a server-side artifact path.",
+      "Capture the current persistent browser state, return image pixels directly to the model, and publish a readable browser artifact. PNG is the default; JPEG, WebP, GIF, AVIF, TIFF, and other Sharp-supported image formats may be requested without changing the browser workflow.",
     inputSchema: {
       type: "object",
       properties: {
         sessionId: SESSION_ID,
-        out: { type: "string" },
+        out: {
+          type: "string",
+          description: "Optional requested copy path. A managed artifact is always retained for MCP resource delivery.",
+        },
         full: { type: "boolean", default: false },
         selector: { type: "string" },
+        format: {
+          type: "string",
+          description: "Output image format. Common values include PNG, JPEG/JPG, WebP, GIF, AVIF, and TIFF.",
+        },
+        quality: {
+          type: "number",
+          description: "Optional encoder quality. Values are softly clamped to 1-100 instead of rejecting the operation.",
+        },
+        timeoutMs: {
+          type: "number",
+          description: "Optional browser capture timeout forwarded to Pursr when supported.",
+        },
       },
+      required: ["sessionId"],
+    },
+    annotations: READ_ONLY,
+  },
+  {
+    name: "purr_work_session_artifacts",
+    description:
+      "List every regular browser-session artifact as MCP resource links, including PNG, JPEG, WebP, GIF, WebM, MP4, audio, PDFs, and unknown binary formats. No extension whitelist is applied; artifacts remain bounded to the managed browser-work directory.",
+    inputSchema: {
+      type: "object",
+      properties: { sessionId: SESSION_ID },
       required: ["sessionId"],
     },
     annotations: READ_ONLY,
@@ -396,12 +426,21 @@ export async function handleBrowserWorkMcpTool(
       return { handled: true, payload: await manager.act(sessionId!, actions) };
     }
     if (name === "purr_work_session_screenshot") {
-      const result = await manager.screenshot(sessionId!, {
-        out: stringValue(args.out),
+      const status = manager.status(sessionId!);
+      const outputDir = stringValue(status.outputDir);
+      if (!outputDir) return error("browser work session has no artifact directory");
+      const raw = await manager.screenshot(sessionId!, {
         full: args.full === true,
         selector: stringValue(args.selector),
+        timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : undefined,
       });
-      const resourceLink = browserWorkScreenshotResourceLink(
+      const result = await transcodeBrowserScreenshot(raw, {
+        format: stringValue(args.format),
+        quality: typeof args.quality === "number" ? args.quality : undefined,
+        out: stringValue(args.out),
+        outputDir,
+      });
+      const resourceLink = browserWorkArtifactResourceLink(
         result.metadata,
         result.data,
         result.mimeType,
@@ -421,6 +460,35 @@ export async function handleBrowserWorkMcpTool(
         ],
       };
     }
+    if (name === "purr_work_session_artifacts") {
+      const status = manager.status(sessionId!);
+      const outputDir = stringValue(status.outputDir);
+      if (!outputDir) return error("browser work session has no artifact directory");
+      const links = await listBrowserWorkArtifactLinks({
+        sessionId,
+        outputDir,
+        url: status.url,
+      });
+      const payload = {
+        sessionId,
+        outputDir,
+        count: links.length,
+        artifacts: links.map(({ uri, name: artifactName, mimeType, size }) => ({
+          uri,
+          name: artifactName,
+          mimeType,
+          size,
+        })),
+      };
+      return {
+        handled: true,
+        payload,
+        content: [
+          { type: "text", text: JSON.stringify(payload, null, 2) },
+          ...links,
+        ],
+      };
+    }
     if (name === "purr_work_session_inspect") {
       return {
         handled: true,
@@ -431,7 +499,25 @@ export async function handleBrowserWorkMcpTool(
       return { handled: true, payload: manager.diagnostics(sessionId!, args.clear === true) };
     }
     if (name === "purr_work_session_close") {
-      return { handled: true, payload: await manager.close(sessionId!) };
+      const status = manager.status(sessionId!);
+      const payload = await manager.close(sessionId!);
+      const browser = payload && typeof payload === "object" && !Array.isArray(payload)
+        ? (payload as { browser?: unknown }).browser
+        : undefined;
+      const video = browser && typeof browser === "object" && !Array.isArray(browser)
+        ? stringValue((browser as { video?: unknown }).video)
+        : undefined;
+      const videoLink = video
+        ? browserWorkArtifactResourceLink({ sessionId, out: video, url: status.url })
+        : undefined;
+      return {
+        handled: true,
+        payload,
+        content: [
+          { type: "text", text: JSON.stringify(payload, null, 2) },
+          ...(videoLink ? [videoLink] : []),
+        ],
+      };
     }
     return { handled: false };
   } catch (caught) {
