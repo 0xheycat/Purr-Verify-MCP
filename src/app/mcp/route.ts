@@ -30,6 +30,7 @@ import {
   listVerifyMcpAppResources,
   readVerifyMcpAppResource,
 } from "@/lib/verify/mcp-app";
+import { readBrowserWorkResource } from "@/lib/verify/browser-work-resource";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -226,7 +227,29 @@ export async function POST(req: NextRequest) {
 
   if (messages.length === 1 && messages[0]?.method === "resources/read") {
     const uri = messages[0].params?.uri || "";
-    const resource = readVerifyMcpAppResource(req, uri);
+    const appResource = readVerifyMcpAppResource(req, uri);
+    if (appResource) {
+      return Response.json(rpcResult(messages[0].id ?? null, appResource), {
+        status: 200,
+        headers: { "x-purr-request-id": requestId, "cache-control": "no-store" },
+      });
+    }
+
+    const auth = await checkAuth(req);
+    if (!auth.ok) {
+      const reason = auth.reason || "Unauthorized";
+      recordVerifyDebugError({ requestId, phase: "resource_auth_check", status: 401, code: "unauthorized", message: reason });
+      return Response.json(rpcError(messages[0].id ?? null, -32001, `Unauthorized: ${reason}`), {
+        status: 401,
+        headers: {
+          ...Object.fromEntries(oauthAuthenticateHeaders(req, reason)),
+          "x-purr-request-id": requestId,
+          "cache-control": "no-store",
+        },
+      });
+    }
+
+    const resource = await readBrowserWorkResource(uri);
     const packet = resource
       ? rpcResult(messages[0].id ?? null, resource)
       : rpcError(messages[0].id ?? null, -32002, `Resource not found: ${uri}`);

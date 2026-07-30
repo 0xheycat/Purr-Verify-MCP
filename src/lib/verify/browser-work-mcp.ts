@@ -4,6 +4,7 @@ import {
   type BrowserWorkMode,
   type BrowserWorkStartInput,
 } from "./browser-work";
+import { browserWorkScreenshotResourceLink } from "./browser-work-resource";
 import { classifyDestructiveCommand } from "./operator-runtime";
 
 export interface BrowserWorkMcpToolDefinition {
@@ -400,12 +401,23 @@ export async function handleBrowserWorkMcpTool(
         full: args.full === true,
         selector: stringValue(args.selector),
       });
+      const resourceLink = browserWorkScreenshotResourceLink(
+        result.metadata,
+        result.data,
+        result.mimeType,
+      );
       return {
         handled: true,
         payload: result.metadata,
         content: [
           { type: "text", text: JSON.stringify(result.metadata, null, 2) },
-          { type: "image", data: result.data, mimeType: result.mimeType },
+          {
+            type: "image",
+            data: result.data,
+            mimeType: result.mimeType,
+            annotations: { audience: ["assistant", "user"], priority: 1 },
+          },
+          ...(resourceLink ? [resourceLink] : []),
         ],
       };
     }

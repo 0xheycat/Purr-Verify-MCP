@@ -315,6 +315,61 @@ describe("Pursr browser work sessions", () => {
     });
   });
 
+  test("adds a readable resource link beside inline screenshot image content", async () => {
+    const state = globalThis as typeof globalThis & {
+      __purrBrowserWorkManager?: {
+        screenshot: (sessionId: string) => Promise<{
+          metadata: Record<string, unknown>;
+          data: string;
+          mimeType: string;
+        }>;
+      };
+    };
+    const previousManager = state.__purrBrowserWorkManager;
+    const previousDataDir = process.env.VERIFY_DATA_DIR;
+    process.env.VERIFY_DATA_DIR = "/tmp/purr-resource-contract";
+    state.__purrBrowserWorkManager = {
+      screenshot: async (sessionId: string) => ({
+        metadata: {
+          sessionId,
+          browserSessionId: `${sessionId}-browser`,
+          out: `/tmp/purr-resource-contract/browser-work/${sessionId}/shot.png`,
+          url: "http://127.0.0.1:3000/",
+        },
+        data: "cG5n",
+        mimeType: "image/png",
+      }),
+    };
+
+    try {
+      const result = await handleBrowserWorkMcpTool("purr_work_session_screenshot", {
+        sessionId: "resource-contract",
+      });
+      const content = result.content ?? [];
+      expect(content.map((entry) => entry.type)).toEqual([
+        "text",
+        "image",
+        "resource_link",
+      ]);
+      expect(content[2]).toMatchObject({
+        type: "resource_link",
+        name: "shot.png",
+        mimeType: "image/png",
+        size: 3,
+        annotations: {
+          audience: ["assistant", "user"],
+          priority: 1,
+        },
+      });
+      expect(String(content[2]?.uri)).toStartWith("purr://browser-work/");
+    } finally {
+      if (previousManager) state.__purrBrowserWorkManager = previousManager;
+      else delete state.__purrBrowserWorkManager;
+      if (previousDataDir === undefined) delete process.env.VERIFY_DATA_DIR;
+      else process.env.VERIFY_DATA_DIR = previousDataDir;
+    }
+  });
+
   test("removes Verify service framework internals from child projects while allowing explicit overrides", () => {
     const previous = {
       standalone: process.env.__NEXT_PRIVATE_STANDALONE_CONFIG,
