@@ -7,6 +7,7 @@ import {
 import {
   browserWorkArtifactResourceLink,
   listBrowserWorkArtifactLinks,
+  type BrowserWorkResourceLink,
 } from "./browser-work-resource";
 import { transcodeBrowserScreenshot } from "./browser-work-media";
 import { classifyDestructiveCommand } from "./operator-runtime";
@@ -262,6 +263,11 @@ export const BROWSER_WORK_MCP_TOOLS: BrowserWorkMcpToolDefinition[] = [
           type: "number",
           description: "Optional browser capture timeout forwarded to Pursr when supported.",
         },
+        includeAttachments: {
+          type: "boolean",
+          default: false,
+          description: "Opt in to MCP resource-link attachments. Default false keeps image pixels inline and avoids ChatGPT file-materialization approval prompts.",
+        },
       },
       required: ["sessionId"],
     },
@@ -270,10 +276,17 @@ export const BROWSER_WORK_MCP_TOOLS: BrowserWorkMcpToolDefinition[] = [
   {
     name: "purr_work_session_artifacts",
     description:
-      "List every regular browser-session artifact as MCP resource links, including PNG, JPEG, WebP, GIF, WebM, MP4, audio, PDFs, and unknown binary formats. No extension whitelist is applied; artifacts remain bounded to the managed browser-work directory.",
+      "List metadata for every regular browser-session artifact, including PNG, JPEG, WebP, GIF, WebM, MP4, audio, PDFs, and unknown binary formats. Set includeAttachments=true only when MCP resource-link attachments are explicitly wanted. No extension whitelist is applied; artifacts remain bounded to the managed browser-work directory.",
     inputSchema: {
       type: "object",
-      properties: { sessionId: SESSION_ID },
+      properties: {
+        sessionId: SESSION_ID,
+        includeAttachments: {
+          type: "boolean",
+          default: false,
+          description: "Opt in to MCP resource-link attachments. Default false avoids ChatGPT file-materialization approval prompts.",
+        },
+      },
       required: ["sessionId"],
     },
     annotations: READ_ONLY,
@@ -303,10 +316,17 @@ export const BROWSER_WORK_MCP_TOOLS: BrowserWorkMcpToolDefinition[] = [
   {
     name: "purr_work_session_close",
     description:
-      "Close the Pursr browser session, finalize any browser video, and terminate the managed dev-server process tree.",
+      "Close the Pursr browser session, finalize any browser video, and terminate the managed dev-server process tree. Final video metadata is returned by default; set includeAttachments=true only when a resource-link attachment is explicitly wanted.",
     inputSchema: {
       type: "object",
-      properties: { sessionId: SESSION_ID },
+      properties: {
+        sessionId: SESSION_ID,
+        includeAttachments: {
+          type: "boolean",
+          default: false,
+          description: "Opt in to a finalized-video resource-link attachment. Default false avoids ChatGPT file-materialization approval prompts.",
+        },
+      },
       required: ["sessionId"],
     },
     annotations: SIDE_EFFECTING,
@@ -334,6 +354,18 @@ function objectArray(value: unknown): Array<Record<string, unknown>> | undefined
     (entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
   );
   return items.length === value.length ? items : undefined;
+}
+
+function artifactMetadata(link: BrowserWorkResourceLink | undefined): Record<string, unknown> | undefined {
+  if (!link) return undefined;
+  return {
+    uri: link.uri,
+    name: link.name,
+    title: link.title,
+    description: link.description,
+    mimeType: link.mimeType,
+    size: link.size,
+  };
 }
 
 function error(message: string, extra: Record<string, unknown> = {}): BrowserWorkMcpToolResult {
@@ -464,18 +496,22 @@ export async function handleBrowserWorkMcpTool(
         result.data,
         result.mimeType,
       );
+      const payload = {
+        ...result.metadata,
+        ...(resourceLink ? { artifact: artifactMetadata(resourceLink) } : {}),
+      };
       return {
         handled: true,
-        payload: result.metadata,
+        payload,
         content: [
-          { type: "text", text: JSON.stringify(result.metadata, null, 2) },
+          { type: "text", text: JSON.stringify(payload, null, 2) },
           {
             type: "image",
             data: result.data,
             mimeType: result.mimeType,
             annotations: { audience: ["assistant", "user"], priority: 1 },
           },
-          ...(resourceLink ? [resourceLink] : []),
+          ...(args.includeAttachments === true && resourceLink ? [resourceLink] : []),
         ],
       };
     }
@@ -504,7 +540,7 @@ export async function handleBrowserWorkMcpTool(
         payload,
         content: [
           { type: "text", text: JSON.stringify(payload, null, 2) },
-          ...links,
+          ...(args.includeAttachments === true ? links : []),
         ],
       };
     }
@@ -529,12 +565,18 @@ export async function handleBrowserWorkMcpTool(
       const videoLink = video
         ? browserWorkArtifactResourceLink({ sessionId, out: video, url: status.url })
         : undefined;
+      const responsePayload = payload && typeof payload === "object" && !Array.isArray(payload)
+        ? {
+            ...(payload as Record<string, unknown>),
+            ...(videoLink ? { videoArtifact: artifactMetadata(videoLink) } : {}),
+          }
+        : payload;
       return {
         handled: true,
-        payload,
+        payload: responsePayload,
         content: [
-          { type: "text", text: JSON.stringify(payload, null, 2) },
-          ...(videoLink ? [videoLink] : []),
+          { type: "text", text: JSON.stringify(responsePayload, null, 2) },
+          ...(args.includeAttachments === true && videoLink ? [videoLink] : []),
         ],
       };
     }

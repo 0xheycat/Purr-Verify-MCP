@@ -60,14 +60,36 @@ describe("Pursr browser work sessions", () => {
     const artifactsTool = BROWSER_WORK_MCP_TOOLS.find(
       (tool) => tool.name === "purr_work_session_artifacts",
     );
+    const closeTool = BROWSER_WORK_MCP_TOOLS.find(
+      (tool) => tool.name === "purr_work_session_close",
+    );
     const screenshotSchema = screenshotTool?.inputSchema as {
-      properties?: Record<string, { type?: string; description?: string }>;
+      properties?: Record<string, { type?: string; description?: string; default?: unknown }>;
+    };
+    const artifactsSchema = artifactsTool?.inputSchema as {
+      properties?: Record<string, { type?: string; description?: string; default?: unknown }>;
+    };
+    const closeSchema = closeTool?.inputSchema as {
+      properties?: Record<string, { type?: string; description?: string; default?: unknown }>;
     };
 
     expect(screenshotSchema.properties?.format?.type).toBe("string");
     expect(screenshotSchema.properties?.quality?.type).toBe("number");
     expect(screenshotSchema.properties?.format?.description).toContain("PNG");
     expect(screenshotSchema.properties?.format?.description).toContain("GIF");
+    expect(screenshotSchema.properties?.includeAttachments).toMatchObject({
+      type: "boolean",
+      default: false,
+    });
+    expect(screenshotSchema.properties?.includeAttachments?.description).toContain("materialization");
+    expect(artifactsSchema.properties?.includeAttachments).toMatchObject({
+      type: "boolean",
+      default: false,
+    });
+    expect(closeSchema.properties?.includeAttachments).toMatchObject({
+      type: "boolean",
+      default: false,
+    });
     expect(artifactsTool?.annotations.readOnlyHint).toBe(true);
   });
 
@@ -350,7 +372,7 @@ describe("Pursr browser work sessions", () => {
     });
   });
 
-  test("adds a readable resource link beside inline screenshot image content", async () => {
+  test("adds a readable resource link only when screenshot attachments are explicitly requested", async () => {
     const state = globalThis as typeof globalThis & {
       __purrBrowserWorkManager?: {
         status: (sessionId: string) => { outputDir: string; url: string };
@@ -384,6 +406,7 @@ describe("Pursr browser work sessions", () => {
     try {
       const result = await handleBrowserWorkMcpTool("purr_work_session_screenshot", {
         sessionId: "resource-contract",
+        includeAttachments: true,
       });
       const content = result.content ?? [];
       expect(content.map((entry) => entry.type)).toEqual([

@@ -36,7 +36,7 @@ async function fixture() {
 }
 
 describe("browser work media MCP delivery", () => {
-  test("transcodes screenshots to WebP and keeps an inline image plus readable resource", async () => {
+  test("transcodes screenshots to WebP inline without materializable attachments by default", async () => {
     const { dataDir, outputDir, png, sourceOut } = await fixture();
     process.env.VERIFY_DATA_DIR = dataDir;
     state.__purrBrowserWorkManager = {
@@ -54,13 +54,31 @@ describe("browser work media MCP delivery", () => {
       quality: 82,
     });
     const content = result.content ?? [];
-    expect(content.map((entry) => entry.type)).toEqual(["text", "image", "resource_link"]);
+    expect(content.map((entry) => entry.type)).toEqual(["text", "image"]);
     expect(content[1]?.mimeType).toBe("image/webp");
-    expect(content[2]).toMatchObject({ type: "resource_link", mimeType: "image/webp" });
-    expect(String(content[2]?.name)).toEndWith(".webp");
+    expect(result.payload).toMatchObject({
+      artifact: { mimeType: "image/webp" },
+    });
+
+    const attached = await handleBrowserWorkMcpTool("purr_work_session_screenshot", {
+      sessionId: "media-session",
+      format: "webp",
+      quality: 82,
+      includeAttachments: true,
+    });
+    expect(attached.content?.map((entry) => entry.type)).toEqual([
+      "text",
+      "image",
+      "resource_link",
+    ]);
+    expect(attached.content?.[2]).toMatchObject({
+      type: "resource_link",
+      mimeType: "image/webp",
+    });
+    expect(String(attached.content?.[2]?.name)).toEndWith(".webp");
   });
 
-  test("lists GIF and video artifacts and publishes finalized video on close", async () => {
+  test("lists GIF and video metadata without attachments and keeps attachment delivery opt-in", async () => {
     const { dataDir, outputDir, video } = await fixture();
     process.env.VERIFY_DATA_DIR = dataDir;
     state.__purrBrowserWorkManager = {
@@ -75,14 +93,39 @@ describe("browser work media MCP delivery", () => {
     const artifacts = await handleBrowserWorkMcpTool("purr_work_session_artifacts", {
       sessionId: "media-session",
     });
-    expect((artifacts.content ?? []).filter((entry) => entry.type === "resource_link")
+    expect(artifacts.content?.map((entry) => entry.type)).toEqual(["text"]);
+    expect(artifacts.payload).toMatchObject({
+      artifacts: [
+        { mimeType: "image/gif" },
+        { mimeType: "image/png" },
+        { mimeType: "video/webm" },
+      ],
+    });
+
+    const attachedArtifacts = await handleBrowserWorkMcpTool("purr_work_session_artifacts", {
+      sessionId: "media-session",
+      includeAttachments: true,
+    });
+    expect((attachedArtifacts.content ?? []).filter((entry) => entry.type === "resource_link")
       .map((entry) => entry.mimeType)).toEqual(["image/gif", "image/png", "video/webm"]);
 
     const closed = await handleBrowserWorkMcpTool("purr_work_session_close", {
       sessionId: "media-session",
     });
-    expect(closed.content?.map((entry) => entry.type)).toEqual(["text", "resource_link"]);
-    expect(closed.content?.[1]).toMatchObject({
+    expect(closed.content?.map((entry) => entry.type)).toEqual(["text"]);
+    expect(closed.payload).toMatchObject({
+      videoArtifact: { mimeType: "video/webm", name: "capture.webm" },
+    });
+
+    const attachedClose = await handleBrowserWorkMcpTool("purr_work_session_close", {
+      sessionId: "media-session",
+      includeAttachments: true,
+    });
+    expect(attachedClose.content?.map((entry) => entry.type)).toEqual([
+      "text",
+      "resource_link",
+    ]);
+    expect(attachedClose.content?.[1]).toMatchObject({
       type: "resource_link",
       mimeType: "video/webm",
       name: "capture.webm",
