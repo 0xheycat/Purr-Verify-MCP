@@ -45,6 +45,62 @@ const SESSION_ID = {
   description: "Work-session identifier returned by purr_work_session_start.",
 };
 
+const NON_EVAL_ACTION_TYPES = [
+  "click",
+  "doubleClick",
+  "hover",
+  "fill",
+  "type",
+  "check",
+  "select",
+  "drag",
+  "press",
+  "keyDown",
+  "keyUp",
+  "scroll",
+  "wait",
+  "sleep",
+  "navigate",
+  "reload",
+  "move",
+  "annotate",
+  "clearAnnotations",
+];
+
+const BROWSER_ACTION_SCHEMA = {
+  oneOf: [
+    {
+      type: "object",
+      properties: {
+        type: { const: "eval" },
+        js: { type: "string", minLength: 1 },
+        settleMs: { type: "number", minimum: 0 },
+      },
+      required: ["type", "js"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        op: { const: "eval" },
+        js: { type: "string", minLength: 1 },
+        settleMs: { type: "number", minimum: 0 },
+      },
+      required: ["op", "js"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        type: { type: "string", enum: NON_EVAL_ACTION_TYPES },
+        op: { type: "string", enum: NON_EVAL_ACTION_TYPES },
+      },
+      anyOf: [{ required: ["type"] }, { required: ["op"] }],
+      additionalProperties: true,
+    },
+  ],
+};
+
 export const BROWSER_WORK_MCP_TOOLS: BrowserWorkMcpToolDefinition[] = [
   {
     name: "purr_browser_doctor",
@@ -145,12 +201,12 @@ export const BROWSER_WORK_MCP_TOOLS: BrowserWorkMcpToolDefinition[] = [
   {
     name: "purr_work_session_act",
     description:
-      "Perform a small ordered Pursr action sequence in the persistent browser. Supports selectors, coordinates, click, hover, fill, type, drag, keys, scroll, navigation, reload, eval, cursor movement, and annotations.",
+      "Perform a small ordered Pursr action sequence in the persistent browser. Eval actions require a non-empty js field; other actions support selectors, coordinates, click, hover, fill, type, drag, keys, scroll, navigation, reload, cursor movement, and annotations.",
     inputSchema: {
       type: "object",
       properties: {
         sessionId: SESSION_ID,
-        actions: { type: "array", minItems: 1, items: { type: "object" } },
+        actions: { type: "array", minItems: 1, items: BROWSER_ACTION_SCHEMA },
       },
       required: ["sessionId", "actions"],
     },
@@ -236,6 +292,16 @@ function error(message: string, extra: Record<string, unknown> = {}): BrowserWor
     isError: true,
     payload: { error: "browser_work_failed", message, ...extra },
   };
+}
+
+function validateActions(actions: Array<Record<string, unknown>>): BrowserWorkMcpToolResult | undefined {
+  for (const [actionIndex, action] of actions.entries()) {
+    const operation = stringValue(action.type) ?? stringValue(action.op);
+    if (operation === "eval" && !stringValue(action.js)) {
+      return error("eval action requires non-empty js", { actionIndex });
+    }
+  }
+  return undefined;
 }
 
 export async function handleBrowserWorkMcpTool(
@@ -324,6 +390,8 @@ export async function handleBrowserWorkMcpTool(
     if (name === "purr_work_session_act") {
       const actions = objectArray(args.actions);
       if (!actions?.length) return error("actions must be an array of objects");
+      const validationError = validateActions(actions);
+      if (validationError) return validationError;
       return { handled: true, payload: await manager.act(sessionId!, actions) };
     }
     if (name === "purr_work_session_screenshot") {

@@ -52,6 +52,37 @@ describe("Pursr browser work sessions", () => {
     expect(BROWSER_WORK_MCP_TOOLS.find((tool) => tool.name === "purr_browser_doctor")?.annotations.readOnlyHint).toBe(true);
   });
 
+  test("publishes a typed eval action contract that requires non-empty js", () => {
+    const actTool = BROWSER_WORK_MCP_TOOLS.find(
+      (tool) => tool.name === "purr_work_session_act",
+    );
+    const inputSchema = actTool?.inputSchema as {
+      properties?: {
+        actions?: {
+          items?: {
+            oneOf?: Array<{
+              properties?: {
+                type?: { const?: string };
+                js?: { type?: string; minLength?: number };
+              };
+              required?: string[];
+              additionalProperties?: boolean;
+            }>;
+          };
+        };
+      };
+    };
+    const variants = inputSchema.properties?.actions?.items?.oneOf;
+
+    expect(Array.isArray(variants)).toBe(true);
+    const evalAction = variants?.find(
+      (variant) => variant.properties?.type?.const === "eval",
+    );
+    expect(evalAction?.required).toContain("js");
+    expect(evalAction?.properties?.js).toEqual({ type: "string", minLength: 1 });
+    expect(evalAction?.additionalProperties).toBe(false);
+  });
+
   test("injects the installed Playwright driver into Pursr sessions", async () => {
     const calls: Array<{ kind: string; input: unknown }> = [];
     const driver = {
@@ -263,6 +294,23 @@ describe("Pursr browser work sessions", () => {
       payload: {
         error: "browser_work_failed",
         classification: "recursive_force_delete",
+      },
+    });
+  });
+
+  test("rejects eval without non-empty js before invoking Pursr", async () => {
+    const result = await handleBrowserWorkMcpTool("purr_work_session_act", {
+      sessionId: "missing-session",
+      actions: [{ type: "eval", script: "({ answer: 42 })" }],
+    });
+
+    expect(result).toMatchObject({
+      handled: true,
+      isError: true,
+      payload: {
+        error: "browser_work_failed",
+        message: "eval action requires non-empty js",
+        actionIndex: 0,
       },
     });
   });
