@@ -55,18 +55,42 @@ export interface BrowserWorkSummary {
   error: string | null;
 }
 
+interface PursrCaptureAttempt {
+  strategy: string;
+  status: string;
+  durationMs: number;
+  errorCode?: string;
+  error?: string;
+}
+
+interface PursrCaptureImage {
+  width: number;
+  height: number;
+  bytes: number;
+  mimeType: string;
+}
+
+interface PursrScreenshotResult {
+  sessionId: string;
+  out: string;
+  url: string | null;
+  data: string;
+  mimeType: string;
+  captureMode: string;
+  fallbackUsed: boolean;
+  elapsedMs: number;
+  requestedTimeoutMs: number;
+  attempts: PursrCaptureAttempt[];
+  image: PursrCaptureImage;
+  fallbackError?: string;
+}
+
 interface PursrBrowserSessionManager {
   open(input: Record<string, unknown>): Promise<Record<string, unknown>>;
   list(): Array<Record<string, unknown>>;
   snapshot(sessionId: string, options?: Record<string, unknown>): Promise<Record<string, unknown>>;
   act(sessionId: string, actions: Array<Record<string, unknown>>): Promise<Record<string, unknown>>;
-  screenshot(sessionId: string, options?: Record<string, unknown>): Promise<{
-    sessionId: string;
-    out: string;
-    url: string;
-    data: string;
-    mimeType: string;
-  }>;
+  screenshot(sessionId: string, options?: Record<string, unknown>): Promise<PursrScreenshotResult>;
   inspect(sessionId: string, selector: string): Promise<Record<string, unknown>>;
   diagnostics(sessionId: string, options?: { clear?: boolean }): Record<string, unknown>;
   close(sessionId: string): Promise<Record<string, unknown>>;
@@ -526,10 +550,17 @@ export class BrowserWorkSessionManager {
     const record = this.requireBrowser(sessionId);
     const result = await record.browserManager!.screenshot(record.browserSessionId!, options);
     record.updatedAt = this.now().toISOString();
+    const { data, mimeType, sessionId: pursrSessionId, ...captureMetadata } = result;
     return {
-      metadata: { sessionId, browserSessionId: record.browserSessionId, out: result.out, url: result.url },
-      data: result.data,
-      mimeType: result.mimeType,
+      metadata: {
+        ...captureMetadata,
+        sessionId,
+        browserSessionId: record.browserSessionId,
+        pursrSessionId,
+        captureMimeType: mimeType,
+      },
+      data,
+      mimeType,
     };
   }
 

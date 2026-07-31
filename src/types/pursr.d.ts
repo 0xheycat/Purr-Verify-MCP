@@ -27,12 +27,37 @@ declare module "pursr/session" {
     list(): Array<Record<string, unknown>>;
     snapshot(sessionId: string, options?: Record<string, unknown>): Promise<Record<string, unknown>>;
     act(sessionId: string, actions: Array<Record<string, unknown>>): Promise<Record<string, unknown>>;
-    screenshot(sessionId: string, options?: Record<string, unknown>): Promise<{
+    screenshot(sessionId: string, options?: {
+      out?: string;
+      full?: boolean;
+      selector?: string;
+      timeoutMs?: number;
+      strategy?: "auto" | "playwright" | "cdp" | "stitched";
+      animations?: "auto" | "allow" | "disabled";
+    }): Promise<{
       sessionId: string;
       out: string;
-      url: string;
+      url: string | null;
       data: string;
       mimeType: string;
+      captureMode: string;
+      fallbackUsed: boolean;
+      elapsedMs: number;
+      requestedTimeoutMs: number;
+      attempts: Array<{
+        strategy: string;
+        status: string;
+        durationMs: number;
+        errorCode?: string;
+        error?: string;
+      }>;
+      image: {
+        width: number;
+        height: number;
+        bytes: number;
+        mimeType: string;
+      };
+      fallbackError?: string;
     }>;
     inspect(sessionId: string, selector: string): Promise<Record<string, unknown>>;
     diagnostics(sessionId: string, options?: { clear?: boolean }): Record<string, unknown>;

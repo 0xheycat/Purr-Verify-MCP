@@ -153,7 +153,7 @@ beforeAll(async () => {
   await fs.rm(TEST_ROOT, { recursive: true, force: true });
   process.env.DATABASE_URL = DATABASE_URL;
   await pushPrismaSchema();
-});
+}, 30_000);
 
 beforeEach(async () => {
   process.env.DATABASE_URL = DATABASE_URL;

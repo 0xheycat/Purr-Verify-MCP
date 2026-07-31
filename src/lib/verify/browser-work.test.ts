@@ -75,6 +75,14 @@ describe("Pursr browser work sessions", () => {
 
     expect(screenshotSchema.properties?.format?.type).toBe("string");
     expect(screenshotSchema.properties?.quality?.type).toBe("number");
+    expect(screenshotSchema.properties?.strategy).toMatchObject({
+      type: "string",
+      enum: ["auto", "playwright", "cdp", "stitched"],
+    });
+    expect(screenshotSchema.properties?.animations).toMatchObject({
+      type: "string",
+      enum: ["auto", "allow", "disabled"],
+    });
     expect(screenshotSchema.properties?.format?.description).toContain("PNG");
     expect(screenshotSchema.properties?.format?.description).toContain("GIF");
     expect(screenshotSchema.properties?.includeAttachments).toMatchObject({
@@ -255,18 +263,32 @@ describe("Pursr browser work sessions", () => {
   test("uses Pursr for persistent snapshot, actions, image evidence, diagnostics, and close", async () => {
     const child = new FakeChild();
     const calls: string[] = [];
+    let screenshotOptions: Record<string, unknown> | undefined;
     const browserManager = {
       open: async () => ({ sessionId: "attached-browser" }),
       list: () => [],
       snapshot: async () => ({ nodes: [{ tag: "button" }] }),
       act: async () => ({ acted: true }),
-      screenshot: async () => ({
-        sessionId: "attached-browser",
-        out: "/tmp/shot.png",
-        url: "http://127.0.0.1:3000/",
-        data: "cG5n",
-        mimeType: "image/png",
-      }),
+      screenshot: async (_sessionId: string, options: Record<string, unknown>) => {
+        screenshotOptions = options;
+        return {
+          sessionId: "attached-browser",
+          out: "/tmp/shot.png",
+          url: "http://127.0.0.1:3000/",
+          data: "cG5n",
+          mimeType: "image/png",
+          captureMode: "cdp-viewport-fallback",
+          fallbackUsed: true,
+          elapsedMs: 42,
+          requestedTimeoutMs: 321,
+          attempts: [
+            { strategy: "playwright", status: "failed", durationMs: 21, errorCode: "CAPTURE_TIMEOUT", error: "timed out" },
+            { strategy: "cdp", status: "success", durationMs: 18 },
+          ],
+          image: { width: 800, height: 600, bytes: 3, mimeType: "image/png" },
+          fallbackError: "Playwright capture timed out",
+        };
+      },
       inspect: async () => ({ selector: "button", width: 100 }),
       diagnostics: () => ({ console: [] }),
       close: async () => {
@@ -302,7 +324,29 @@ describe("Pursr browser work sessions", () => {
     expect(started.browserAttached).toBe(true);
     expect(await manager.snapshot("attached")).toEqual({ nodes: [{ tag: "button" }] });
     expect(await manager.act("attached", [{ op: "click", selector: "button" }])).toEqual({ acted: true });
-    expect((await manager.screenshot("attached")).mimeType).toBe("image/png");
+    const screenshot = await manager.screenshot("attached", {
+      strategy: "cdp",
+      animations: "allow",
+      timeoutMs: 321,
+    });
+    expect(screenshot.mimeType).toBe("image/png");
+    expect(screenshotOptions).toEqual({ strategy: "cdp", animations: "allow", timeoutMs: 321 });
+    expect(screenshot.metadata).toMatchObject({
+      sessionId: "attached",
+      browserSessionId: "attached-browser",
+      out: "/tmp/shot.png",
+      url: "http://127.0.0.1:3000/",
+      captureMode: "cdp-viewport-fallback",
+      fallbackUsed: true,
+      elapsedMs: 42,
+      requestedTimeoutMs: 321,
+      image: { width: 800, height: 600, bytes: 3, mimeType: "image/png" },
+      fallbackError: "Playwright capture timed out",
+    });
+    expect(screenshot.metadata.attempts).toEqual([
+      { strategy: "playwright", status: "failed", durationMs: 21, errorCode: "CAPTURE_TIMEOUT", error: "timed out" },
+      { strategy: "cdp", status: "success", durationMs: 18 },
+    ]);
     expect(await manager.inspect("attached", "button")).toEqual({ selector: "button", width: 100 });
     expect(manager.diagnostics("attached")).toMatchObject({ browser: { console: [] } });
     child.exitCode = 0;
