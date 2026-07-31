@@ -88,7 +88,7 @@
     "next-themes": "^0.4.6",
     "playwright-core": "^1.61.0",
     "prisma": "^6.11.1",
-    "pursr": "github:0xheycat/pursr#ecf56de8470970bcb49df8a6123117134f2350eb",
+    "pursr": "github:0xheycat/pursr#85d26bd99d5a701d4ea1df3d441f2cc6f7dd27c0",
     "qrcode": "^1.5.4",
     "react": "^19.0.0",
     "react-day-picker": "^9.8.0",

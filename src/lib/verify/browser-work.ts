@@ -89,7 +89,11 @@ interface PursrBrowserSessionManager {
   open(input: Record<string, unknown>): Promise<Record<string, unknown>>;
   list(): Array<Record<string, unknown>>;
   snapshot(sessionId: string, options?: Record<string, unknown>): Promise<Record<string, unknown>>;
-  act(sessionId: string, actions: Array<Record<string, unknown>>): Promise<Record<string, unknown>>;
+  act(
+    sessionId: string,
+    actions: Array<Record<string, unknown>>,
+    options?: Record<string, unknown>,
+  ): Promise<Record<string, unknown>>;
   screenshot(sessionId: string, options?: Record<string, unknown>): Promise<PursrScreenshotResult>;
   inspect(sessionId: string, selector: string): Promise<Record<string, unknown>>;
   diagnostics(sessionId: string, options?: { clear?: boolean }): Record<string, unknown>;
@@ -535,10 +539,18 @@ export class BrowserWorkSessionManager {
     return record.browserManager!.snapshot(record.browserSessionId!, options);
   }
 
-  async act(sessionId: string, actions: Array<Record<string, unknown>>): Promise<Record<string, unknown>> {
+  async act(
+    sessionId: string,
+    actions: Array<Record<string, unknown>>,
+    options: Record<string, unknown> = {},
+  ): Promise<Record<string, unknown>> {
     if (!Array.isArray(actions) || actions.length === 0) throw new Error("actions must be a non-empty array");
     const record = this.requireBrowser(sessionId);
-    const result = await record.browserManager!.act(record.browserSessionId!, actions);
+    const result = await record.browserManager!.act(
+      record.browserSessionId!,
+      actions,
+      options,
+    );
     record.updatedAt = this.now().toISOString();
     return result;
   }

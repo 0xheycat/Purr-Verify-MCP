@@ -10,6 +10,7 @@ import {
   BROWSER_WORK_MCP_TOOLS,
   handleBrowserWorkMcpTool,
 } from "./browser-work-mcp";
+import { recentVerifyDebugErrors } from "./debug";
 import { createProjectProcessEnvironment } from "./operator-runtime";
 
 class FakeChild extends EventEmitter {
@@ -101,20 +102,38 @@ describe("Pursr browser work sessions", () => {
     expect(artifactsTool?.annotations.readOnlyHint).toBe(true);
   });
 
-  test("publishes explicit selector timeout and force controls without automatic force", () => {
+  test("publishes bounded action controls and an explicit navigate url contract", () => {
     const actTool = BROWSER_WORK_MCP_TOOLS.find(
       (tool) => tool.name === "purr_work_session_act",
     );
-    const variants = ((actTool?.inputSchema as {
-      properties?: { actions?: { items?: { oneOf?: Array<Record<string, unknown>> } } };
-    }).properties?.actions?.items?.oneOf ?? []) as Array<{
-      properties?: Record<string, { type?: string; description?: string; minimum?: number }>;
+    const inputSchema = actTool?.inputSchema as {
+      properties?: {
+        timeoutMs?: { type?: string; minimum?: number; description?: string };
+        actions?: { items?: { oneOf?: Array<Record<string, unknown>> } };
+      };
+    };
+    const variants = (inputSchema.properties?.actions?.items?.oneOf ?? []) as Array<{
+      properties?: Record<string, {
+        const?: string;
+        type?: string;
+        description?: string;
+        minimum?: number;
+        minLength?: number;
+      }>;
+      required?: string[];
     }>;
     const selectorVariant = variants.find((variant) => variant.properties?.force);
+    const navigateVariant = variants.find((variant) => variant.properties?.type?.const === "navigate");
+    const evalVariant = variants.find((variant) => variant.properties?.type?.const === "eval");
 
+    expect(inputSchema.properties?.timeoutMs).toMatchObject({ type: "number", minimum: 0 });
+    expect(inputSchema.properties?.timeoutMs?.description).toContain("eval actions");
     expect(selectorVariant?.properties?.timeoutMs).toMatchObject({ type: "number", minimum: 0 });
     expect(selectorVariant?.properties?.force?.type).toBe("boolean");
     expect(selectorVariant?.properties?.force?.description).toContain("Never enabled automatically");
+    expect(navigateVariant?.required).toEqual(["type", "url"]);
+    expect(navigateVariant?.properties?.url).toMatchObject({ type: "string", minLength: 1 });
+    expect(evalVariant?.properties?.timeoutMs).toMatchObject({ type: "number", minimum: 0 });
   });
 
   test("publishes a typed eval action contract that requires non-empty js", () => {
@@ -263,12 +282,20 @@ describe("Pursr browser work sessions", () => {
   test("uses Pursr for persistent snapshot, actions, image evidence, diagnostics, and close", async () => {
     const child = new FakeChild();
     const calls: string[] = [];
+    let actionOptions: Record<string, unknown> | undefined;
     let screenshotOptions: Record<string, unknown> | undefined;
     const browserManager = {
       open: async () => ({ sessionId: "attached-browser" }),
       list: () => [],
       snapshot: async () => ({ nodes: [{ tag: "button" }] }),
-      act: async () => ({ acted: true }),
+      act: async (
+        _sessionId: string,
+        _actions: Array<Record<string, unknown>>,
+        options: Record<string, unknown>,
+      ) => {
+        actionOptions = options;
+        return { acted: true };
+      },
       screenshot: async (_sessionId: string, options: Record<string, unknown>) => {
         screenshotOptions = options;
         return {
@@ -323,7 +350,12 @@ describe("Pursr browser work sessions", () => {
     expect(started.status).toBe("ready");
     expect(started.browserAttached).toBe(true);
     expect(await manager.snapshot("attached")).toEqual({ nodes: [{ tag: "button" }] });
-    expect(await manager.act("attached", [{ op: "click", selector: "button" }])).toEqual({ acted: true });
+    expect(await manager.act(
+      "attached",
+      [{ op: "click", selector: "button" }],
+      { timeoutMs: 4_321 },
+    )).toEqual({ acted: true });
+    expect(actionOptions).toEqual({ timeoutMs: 4_321 });
     const screenshot = await manager.screenshot("attached", {
       strategy: "cdp",
       animations: "allow",
@@ -414,6 +446,58 @@ describe("Pursr browser work sessions", () => {
         actionIndex: 0,
       },
     });
+    expect(recentVerifyDebugErrors(1)[0]).toMatchObject({
+      phase: "browser_work_tool",
+      tool: "purr_work_session_act",
+      code: "browser_work_failed",
+      message: "eval action requires non-empty js",
+    });
+  });
+
+  test("records structured Pursr action failures without turning them into transport failures", async () => {
+    const state = globalThis as typeof globalThis & {
+      __purrBrowserWorkManager?: {
+        act: (
+          sessionId: string,
+          actions: Array<Record<string, unknown>>,
+          options: Record<string, unknown>,
+        ) => Promise<Record<string, unknown>>;
+      };
+    };
+    const previousManager = state.__purrBrowserWorkManager;
+    state.__purrBrowserWorkManager = {
+      act: async (_sessionId, _actions, options) => ({
+        failed: true,
+        trace: [{ index: 0, type: "eval", ok: false, error: `eval action timed out after ${options.timeoutMs}ms` }],
+      }),
+    };
+
+    try {
+      const result = await handleBrowserWorkMcpTool("purr_work_session_act", {
+        sessionId: "bounded-action",
+        timeoutMs: 250,
+        actions: [{ type: "eval", js: "new Promise(() => {})" }],
+      });
+
+      expect(result).toMatchObject({
+        handled: true,
+        payload: {
+          failed: true,
+          trace: [{ ok: false, error: "eval action timed out after 250ms" }],
+        },
+      });
+      expect(result.isError).toBeUndefined();
+      expect(recentVerifyDebugErrors(1)[0]).toMatchObject({
+        phase: "browser_work_tool",
+        tool: "purr_work_session_act",
+        code: "browser_work_failed",
+        message: "eval action timed out after 250ms",
+        hint: "sessionId=bounded-action",
+      });
+    } finally {
+      if (previousManager) state.__purrBrowserWorkManager = previousManager;
+      else delete state.__purrBrowserWorkManager;
+    }
   });
 
   test("adds a readable resource link only when screenshot attachments are explicitly requested", async () => {

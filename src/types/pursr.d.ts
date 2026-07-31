@@ -26,7 +26,11 @@ declare module "pursr/session" {
     open(input: Record<string, unknown>): Promise<Record<string, unknown>>;
     list(): Array<Record<string, unknown>>;
     snapshot(sessionId: string, options?: Record<string, unknown>): Promise<Record<string, unknown>>;
-    act(sessionId: string, actions: Array<Record<string, unknown>>): Promise<Record<string, unknown>>;
+    act(
+      sessionId: string,
+      actions: Array<Record<string, unknown>>,
+      options?: { timeoutMs?: number },
+    ): Promise<Record<string, unknown>>;
     screenshot(sessionId: string, options?: {
       out?: string;
       full?: boolean;
