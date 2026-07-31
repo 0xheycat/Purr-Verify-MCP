@@ -10,6 +10,7 @@ import {
   type BrowserWorkResourceLink,
 } from "./browser-work-resource";
 import { transcodeBrowserScreenshot } from "./browser-work-media";
+import { recordVerifyDebugError } from "./debug";
 import { classifyDestructiveCommand } from "./operator-runtime";
 
 export interface BrowserWorkMcpToolDefinition {
@@ -66,12 +67,17 @@ const NON_EVAL_ACTION_TYPES = [
   "scroll",
   "wait",
   "sleep",
-  "navigate",
   "reload",
   "move",
   "annotate",
   "clearAnnotations",
 ];
+
+const ACTION_TIMEOUT = {
+  type: "number",
+  minimum: 0,
+  description: "Per-action deadline. Overrides the top-level purr_work_session_act timeoutMs.",
+};
 
 const BROWSER_ACTION_SCHEMA = {
   oneOf: [
@@ -80,6 +86,7 @@ const BROWSER_ACTION_SCHEMA = {
       properties: {
         type: { const: "eval" },
         js: { type: "string", minLength: 1 },
+        timeoutMs: ACTION_TIMEOUT,
         settleMs: { type: "number", minimum: 0 },
       },
       required: ["type", "js"],
@@ -90,9 +97,40 @@ const BROWSER_ACTION_SCHEMA = {
       properties: {
         op: { const: "eval" },
         js: { type: "string", minLength: 1 },
+        timeoutMs: ACTION_TIMEOUT,
         settleMs: { type: "number", minimum: 0 },
       },
       required: ["op", "js"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        type: { const: "navigate" },
+        url: {
+          type: "string",
+          minLength: 1,
+          description: "Required absolute or resolvable target URL for navigate actions.",
+        },
+        timeoutMs: ACTION_TIMEOUT,
+        settleMs: { type: "number", minimum: 0 },
+      },
+      required: ["type", "url"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        op: { const: "navigate" },
+        url: {
+          type: "string",
+          minLength: 1,
+          description: "Required absolute or resolvable target URL for navigate actions.",
+        },
+        timeoutMs: ACTION_TIMEOUT,
+        settleMs: { type: "number", minimum: 0 },
+      },
+      required: ["op", "url"],
       additionalProperties: false,
     },
     {
@@ -104,11 +142,7 @@ const BROWSER_ACTION_SCHEMA = {
           type: "string",
           description: "CSS, text, role, label, placeholder, test-id, or xpath selector supported by Pursr.",
         },
-        timeoutMs: {
-          type: "number",
-          minimum: 0,
-          description: "Per-action timeout forwarded to Pursr and Playwright.",
-        },
+        timeoutMs: ACTION_TIMEOUT,
         force: {
           type: "boolean",
           description: "Explicitly bypass Playwright actionability checks for selector actions. Never enabled automatically.",
@@ -226,11 +260,16 @@ export const BROWSER_WORK_MCP_TOOLS: BrowserWorkMcpToolDefinition[] = [
   {
     name: "purr_work_session_act",
     description:
-      "Perform a small ordered Pursr action sequence in the persistent browser. Eval actions require a non-empty js field; other actions support selectors, coordinates, click, hover, fill, type, drag, keys, scroll, navigation, reload, cursor movement, and annotations.",
+      "Perform a small ordered Pursr action sequence in the persistent browser. Eval actions require non-empty js and are bounded by timeoutMs. Navigate actions require url. Other actions support selectors, coordinates, click, hover, fill, type, drag, keys, scroll, reload, cursor movement, and annotations.",
     inputSchema: {
       type: "object",
       properties: {
         sessionId: SESSION_ID,
+        timeoutMs: {
+          type: "number",
+          minimum: 0,
+          description: "Default per-action deadline for actions that omit timeoutMs, including eval actions.",
+        },
         actions: { type: "array", minItems: 1, items: BROWSER_ACTION_SCHEMA },
       },
       required: ["sessionId", "actions"],
@@ -387,11 +426,33 @@ function error(message: string, extra: Record<string, unknown> = {}): BrowserWor
   };
 }
 
-function validateActions(actions: Array<Record<string, unknown>>): BrowserWorkMcpToolResult | undefined {
+function browserWorkFailure(
+  tool: string | undefined,
+  sessionId: string | undefined,
+  message: string,
+  extra: Record<string, unknown> = {},
+): BrowserWorkMcpToolResult {
+  recordVerifyDebugError({
+    phase: "browser_work_tool",
+    tool: tool ?? null,
+    status: "failed",
+    code: "browser_work_failed",
+    message,
+    hint: sessionId ? `sessionId=${sessionId}` : undefined,
+  });
+  return error(message, extra);
+}
+
+function validateActions(
+  actions: Array<Record<string, unknown>>,
+): { message: string; extra: Record<string, unknown> } | undefined {
   for (const [actionIndex, action] of actions.entries()) {
     const operation = stringValue(action.type) ?? stringValue(action.op);
     if (operation === "eval" && !stringValue(action.js)) {
-      return error("eval action requires non-empty js", { actionIndex });
+      return { message: "eval action requires non-empty js", extra: { actionIndex } };
+    }
+    if (operation === "navigate" && !stringValue(action.url)) {
+      return { message: "navigate action requires non-empty url", extra: { actionIndex } };
     }
   }
   return undefined;
@@ -403,23 +464,25 @@ export async function handleBrowserWorkMcpTool(
 ): Promise<BrowserWorkMcpToolResult> {
   const toolNames = new Set(BROWSER_WORK_MCP_TOOLS.map((tool) => tool.name));
   if (!toolNames.has(name ?? "")) return { handled: false };
+  const sessionId = stringValue(args.sessionId);
+  const fail = (message: string, extra: Record<string, unknown> = {}) =>
+    browserWorkFailure(name, sessionId, message, extra);
   try {
     const manager = getBrowserWorkSessionManager();
     if (name === "purr_browser_doctor") return { handled: true, payload: await browserDoctor() };
     if (name === "purr_work_sessions") return { handled: true, payload: { sessions: manager.list() } };
 
-    const sessionId = stringValue(args.sessionId);
-    if (name !== "purr_work_session_start" && !sessionId) return error("sessionId is required");
+    if (name !== "purr_work_session_start" && !sessionId) return fail("sessionId is required");
 
     if (name === "purr_work_session_start") {
       const cwd = stringValue(args.cwd);
-      if (!cwd) return error("cwd is required");
+      if (!cwd) return fail("cwd is required");
       const argv = stringArray(args.argv);
       const command = stringValue(args.command);
       const display = argv?.join(" ") ?? command ?? "";
       const destructive = classifyDestructiveCommand(display);
       if (destructive && args.confirmDestructive !== true) {
-        return error("destructive command requires confirmDestructive=true", {
+        return fail("destructive command requires confirmDestructive=true", {
           classification: destructive,
           command: display,
         });
@@ -482,15 +545,20 @@ export async function handleBrowserWorkMcpTool(
     }
     if (name === "purr_work_session_act") {
       const actions = objectArray(args.actions);
-      if (!actions?.length) return error("actions must be an array of objects");
+      if (!actions?.length) return fail("actions must be an array of objects");
       const validationError = validateActions(actions);
-      if (validationError) return validationError;
-      return { handled: true, payload: await manager.act(sessionId!, actions) };
+      if (validationError) return fail(validationError.message, validationError.extra);
+      return {
+        handled: true,
+        payload: await manager.act(sessionId!, actions, {
+          timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : undefined,
+        }),
+      };
     }
     if (name === "purr_work_session_screenshot") {
       const status = manager.status(sessionId!);
       const outputDir = stringValue(status.outputDir);
-      if (!outputDir) return error("browser work session has no artifact directory");
+      if (!outputDir) return fail("browser work session has no artifact directory");
       const raw = await manager.screenshot(sessionId!, {
         full: args.full === true,
         selector: stringValue(args.selector),
@@ -531,7 +599,7 @@ export async function handleBrowserWorkMcpTool(
     if (name === "purr_work_session_artifacts") {
       const status = manager.status(sessionId!);
       const outputDir = stringValue(status.outputDir);
-      if (!outputDir) return error("browser work session has no artifact directory");
+      if (!outputDir) return fail("browser work session has no artifact directory");
       const links = await listBrowserWorkArtifactLinks({
         sessionId,
         outputDir,
@@ -595,6 +663,6 @@ export async function handleBrowserWorkMcpTool(
     }
     return { handled: false };
   } catch (caught) {
-    return error(caught instanceof Error ? caught.message : String(caught));
+    return fail(caught instanceof Error ? caught.message : String(caught));
   }
 }
