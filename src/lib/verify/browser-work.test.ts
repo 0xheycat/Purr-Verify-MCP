@@ -454,6 +454,52 @@ describe("Pursr browser work sessions", () => {
     });
   });
 
+  test("records structured Pursr action failures without turning them into transport failures", async () => {
+    const state = globalThis as typeof globalThis & {
+      __purrBrowserWorkManager?: {
+        act: (
+          sessionId: string,
+          actions: Array<Record<string, unknown>>,
+          options: Record<string, unknown>,
+        ) => Promise<Record<string, unknown>>;
+      };
+    };
+    const previousManager = state.__purrBrowserWorkManager;
+    state.__purrBrowserWorkManager = {
+      act: async (_sessionId, _actions, options) => ({
+        failed: true,
+        trace: [{ index: 0, type: "eval", ok: false, error: `eval action timed out after ${options.timeoutMs}ms` }],
+      }),
+    };
+
+    try {
+      const result = await handleBrowserWorkMcpTool("purr_work_session_act", {
+        sessionId: "bounded-action",
+        timeoutMs: 250,
+        actions: [{ type: "eval", js: "new Promise(() => {})" }],
+      });
+
+      expect(result).toMatchObject({
+        handled: true,
+        payload: {
+          failed: true,
+          trace: [{ ok: false, error: "eval action timed out after 250ms" }],
+        },
+      });
+      expect(result.isError).toBeUndefined();
+      expect(recentVerifyDebugErrors(1)[0]).toMatchObject({
+        phase: "browser_work_tool",
+        tool: "purr_work_session_act",
+        code: "browser_work_failed",
+        message: "eval action timed out after 250ms",
+        hint: "sessionId=bounded-action",
+      });
+    } finally {
+      if (previousManager) state.__purrBrowserWorkManager = previousManager;
+      else delete state.__purrBrowserWorkManager;
+    }
+  });
+
   test("adds a readable resource link only when screenshot attachments are explicitly requested", async () => {
     const state = globalThis as typeof globalThis & {
       __purrBrowserWorkManager?: {

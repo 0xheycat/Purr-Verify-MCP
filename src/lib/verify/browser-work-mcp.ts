@@ -426,12 +426,11 @@ function error(message: string, extra: Record<string, unknown> = {}): BrowserWor
   };
 }
 
-function browserWorkFailure(
+function recordBrowserWorkFailure(
   tool: string | undefined,
   sessionId: string | undefined,
   message: string,
-  extra: Record<string, unknown> = {},
-): BrowserWorkMcpToolResult {
+): void {
   recordVerifyDebugError({
     phase: "browser_work_tool",
     tool: tool ?? null,
@@ -440,7 +439,25 @@ function browserWorkFailure(
     message,
     hint: sessionId ? `sessionId=${sessionId}` : undefined,
   });
+}
+
+function browserWorkFailure(
+  tool: string | undefined,
+  sessionId: string | undefined,
+  message: string,
+  extra: Record<string, unknown> = {},
+): BrowserWorkMcpToolResult {
+  recordBrowserWorkFailure(tool, sessionId, message);
   return error(message, extra);
+}
+
+function actionFailureMessage(payload: Record<string, unknown>): string | undefined {
+  if (payload.failed !== true || !Array.isArray(payload.trace)) return undefined;
+  const failedStep = payload.trace.find(
+    (entry): entry is Record<string, unknown> =>
+      Boolean(entry) && typeof entry === "object" && !Array.isArray(entry) && entry.ok === false,
+  );
+  return stringValue(failedStep?.error) ?? "browser action sequence failed";
 }
 
 function validateActions(
@@ -548,12 +565,12 @@ export async function handleBrowserWorkMcpTool(
       if (!actions?.length) return fail("actions must be an array of objects");
       const validationError = validateActions(actions);
       if (validationError) return fail(validationError.message, validationError.extra);
-      return {
-        handled: true,
-        payload: await manager.act(sessionId!, actions, {
-          timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : undefined,
-        }),
-      };
+      const payload = await manager.act(sessionId!, actions, {
+        timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : undefined,
+      });
+      const actionError = actionFailureMessage(payload);
+      if (actionError) recordBrowserWorkFailure(name, sessionId, actionError);
+      return { handled: true, payload };
     }
     if (name === "purr_work_session_screenshot") {
       const status = manager.status(sessionId!);
