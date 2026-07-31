@@ -39,24 +39,62 @@ describe("browser work media MCP delivery", () => {
   test("transcodes screenshots to WebP inline without materializable attachments by default", async () => {
     const { dataDir, outputDir, png, sourceOut } = await fixture();
     process.env.VERIFY_DATA_DIR = dataDir;
+    let screenshotOptions: Record<string, unknown> | undefined;
     state.__purrBrowserWorkManager = {
       status: () => ({ outputDir, url: "http://127.0.0.1:3000/" }),
-      screenshot: async () => ({
-        metadata: { sessionId: "media-session", out: sourceOut, url: "http://127.0.0.1:3000/" },
-        data: png.toString("base64"),
-        mimeType: "image/png",
-      }),
+      screenshot: async (_sessionId: string, options: Record<string, unknown>) => {
+        screenshotOptions = options;
+        return {
+          metadata: {
+            sessionId: "media-session",
+            out: sourceOut,
+            url: "http://127.0.0.1:3000/",
+            captureMode: "cdp-viewport-fallback",
+            fallbackUsed: true,
+            elapsedMs: 42,
+            requestedTimeoutMs: 321,
+            attempts: [
+              { strategy: "playwright", status: "failed", durationMs: 21, errorCode: "CAPTURE_TIMEOUT" },
+              { strategy: "cdp", status: "success", durationMs: 18 },
+            ],
+            image: { width: 2, height: 2, bytes: png.length, mimeType: "image/png" },
+            fallbackError: "Playwright capture timed out",
+          },
+          data: png.toString("base64"),
+          mimeType: "image/png",
+        };
+      },
     };
 
     const result = await handleBrowserWorkMcpTool("purr_work_session_screenshot", {
       sessionId: "media-session",
       format: "webp",
       quality: 82,
+      strategy: "cdp",
+      animations: "allow",
+      timeoutMs: 321,
     });
     const content = result.content ?? [];
     expect(content.map((entry) => entry.type)).toEqual(["text", "image"]);
     expect(content[1]?.mimeType).toBe("image/webp");
+    expect(screenshotOptions).toEqual({
+      full: false,
+      selector: undefined,
+      timeoutMs: 321,
+      strategy: "cdp",
+      animations: "allow",
+    });
     expect(result.payload).toMatchObject({
+      captureMode: "cdp-viewport-fallback",
+      fallbackUsed: true,
+      elapsedMs: 42,
+      requestedTimeoutMs: 321,
+      attempts: [
+        { strategy: "playwright", status: "failed", durationMs: 21, errorCode: "CAPTURE_TIMEOUT" },
+        { strategy: "cdp", status: "success", durationMs: 18 },
+      ],
+      image: { width: 2, height: 2, bytes: png.length, mimeType: "image/png" },
+      fallbackError: "Playwright capture timed out",
       artifact: { mimeType: "image/webp" },
     });
 

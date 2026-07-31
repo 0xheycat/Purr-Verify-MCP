@@ -240,7 +240,7 @@ export const BROWSER_WORK_MCP_TOOLS: BrowserWorkMcpToolDefinition[] = [
   {
     name: "purr_work_session_screenshot",
     description:
-      "Capture the current persistent browser state, return image pixels directly to the model, and publish a readable browser artifact. PNG is the default; JPEG, WebP, GIF, AVIF, TIFF, and other Sharp-supported image formats may be requested without changing the browser workflow.",
+      "Capture the current persistent browser state, return image pixels plus structured Pursr recovery metadata, and publish a readable browser artifact. Auto adapts across Playwright and CDP; stitched is full-page only. PNG is the default, with optional Sharp transcoding after the validated source capture.",
     inputSchema: {
       type: "object",
       properties: {
@@ -261,7 +261,18 @@ export const BROWSER_WORK_MCP_TOOLS: BrowserWorkMcpToolDefinition[] = [
         },
         timeoutMs: {
           type: "number",
-          description: "Optional browser capture timeout forwarded to Pursr when supported.",
+          minimum: 0,
+          description: "Total capture-operation deadline forwarded to Pursr.",
+        },
+        strategy: {
+          type: "string",
+          enum: ["auto", "playwright", "cdp", "stitched"],
+          description: "Capture strategy forwarded to Pursr. Auto adapts from per-session capture health; stitched requires full=true.",
+        },
+        animations: {
+          type: "string",
+          enum: ["auto", "allow", "disabled"],
+          description: "Animation handling forwarded to Pursr. Auto keeps the package default.",
         },
         includeAttachments: {
           type: "boolean",
@@ -484,6 +495,8 @@ export async function handleBrowserWorkMcpTool(
         full: args.full === true,
         selector: stringValue(args.selector),
         timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : undefined,
+        strategy: stringValue(args.strategy),
+        animations: stringValue(args.animations),
       });
       const result = await transcodeBrowserScreenshot(raw, {
         format: stringValue(args.format),
