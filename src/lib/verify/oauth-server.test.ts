@@ -173,11 +173,11 @@ describe("OAuth request validation", () => {
     });
   });
 
-  test("requires the exact MCP resource", () => {
+  test("requires the exact MCP resource", async () => {
     const missing = authorizeParams();
     missing.delete("resource");
     expect(
-      validateAuthorizeParams(
+      await validateAuthorizeParams(
         missing,
         request("/oauth/authorize")
       )
@@ -185,7 +185,7 @@ describe("OAuth request validation", () => {
 
     const wrong = authorizeParams({ resource: `${ORIGIN}/api/mcp` });
     expect(
-      validateAuthorizeParams(wrong, request("/oauth/authorize"))
+      await validateAuthorizeParams(wrong, request("/oauth/authorize"))
     ).toBe("resource does not match this MCP server");
   });
 
