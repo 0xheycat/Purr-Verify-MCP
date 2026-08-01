@@ -11,11 +11,10 @@ import {
   revokeRefreshCredentialFamily,
   rotateRefreshCredential,
 } from "./oauth-state";
-
-const registeredClients = new Map<
-  string,
-  { redirect_uris: string[]; created_at: number }
->();
+import {
+  findOAuthDynamicClient,
+  registerOAuthDynamicClient,
+} from "./oauth-clients";
 
 interface AuthorizationCodePayload {
   typ: "oauth_code";
@@ -257,22 +256,24 @@ function validRedirectUri(uri: string): boolean {
   }
 }
 
-function isRedirectAllowed(clientId: string, redirectUri: string): boolean {
+async function isRedirectAllowed(
+  clientId: string,
+  redirectUri: string
+): Promise<boolean> {
   if (!validRedirectUri(redirectUri)) return false;
-  const registered = registeredClients.get(clientId);
-  if (registered?.redirect_uris.includes(redirectUri)) return true;
   if (clientId === defaultClientId()) {
     const allowed = allowedRedirectUris();
     if (allowed.length > 0) return allowed.includes(redirectUri);
     return redirectUri.startsWith("https://chatgpt.com/connector/oauth/");
   }
-  return false;
+  const registered = await findOAuthDynamicClient(clientId);
+  return registered?.redirectUris.includes(redirectUri) ?? false;
 }
 
-export function validateAuthorizeParams(
+export async function validateAuthorizeParams(
   params: URLSearchParams,
   req: NextRequest
-): string {
+): Promise<string> {
   const responseType = params.get("response_type");
   const clientId = params.get("client_id") || "";
   const redirectUri = params.get("redirect_uri") || "";
@@ -285,7 +286,7 @@ export function validateAuthorizeParams(
   if (responseType !== "code") return "response_type must be code";
   if (!clientId) return "client_id is required";
   if (!redirectUri) return "redirect_uri is required";
-  if (!isRedirectAllowed(clientId, redirectUri)) {
+  if (!(await isRedirectAllowed(clientId, redirectUri))) {
     return "redirect_uri is not allowed for this client_id";
   }
   if (!codeChallenge) return "code_challenge is required";
@@ -332,7 +333,7 @@ function renderAuthorizePage(
         `<input type="hidden" name="${key}" value="${escapeHtml(params.get(key) || "")}">`
     )
     .join("\n");
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Purr Verify MCP OAuth</title><style>body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#09090b;color:#fafafa;display:grid;place-items:center;min-height:100vh;margin:0;padding:24px}main{width:min(440px,100%);background:#18181b;border:1px solid #3f3f46;border-radius:18px;padding:24px;box-shadow:0 18px 60px #0008}h1{font-size:20px;margin:0 0 8px}p{color:#d4d4d8;line-height:1.5}code{color:#fbbf24;word-break:break-all}input,button{width:100%;box-sizing:border-box;border-radius:10px;border:1px solid #52525b;background:#09090b;color:#fafafa;padding:12px;font-size:15px}button{margin-top:12px;background:#22c55e;border:0;font-weight:700;cursor:pointer}.err{color:#fca5a5}.muted{font-size:13px;color:#a1a1aa}</style></head><body><main><h1>Authorize Purr Verify MCP</h1><p>ChatGPT is requesting access to <code>${escapeHtml(oauthResourceUrl(req))}</code>.</p><p class="muted">Client: <code>${escapeHtml(params.get("client_id") || "")}</code><br>Scopes: <code>${escapeHtml(params.get("scope") || supportedOauthScopes().join(" "))}</code></p>${error ? `<p class="err">${escapeHtml(error)}</p>` : ""}<form method="post" action="/oauth/authorize">${hidden}<label>Owner approval code</label><input type="password" name="owner_code" autocomplete="current-password" required autofocus><button type="submit">Authorize ChatGPT</button></form></main></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Purr Verify MCP OAuth</title><style>body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#09090b;color:#fafafa;display:grid;place-items:center;min-height:100vh;margin:0;padding:24px}main{width:min(440px,100%);background:#18181b;border:1px solid #3f3f46;border-radius:18px;padding:24px;box-shadow:0 18px 60px #0008}h1{font-size:20px;margin:0 0 8px}p{color:#d4d4d8;line-height:1.5}code{color:#fbbf24;word-break:break-all}input,button{width:100%;box-sizing:border-box;border-radius:10px;border:1px solid #52525b;background:#09090b;color:#fafafa;padding:12px;font-size:15px}button{margin-top:12px;background:#22c55e;border:0;font-weight:700;cursor:pointer}.err{color:#fca5a5}.muted{font-size:13px;color:#a1a1aa}</style></head><body><main><h1>Authorize Purr Verify MCP</h1><p>An MCP client is requesting access to <code>${escapeHtml(oauthResourceUrl(req))}</code>.</p><p class="muted">Client: <code>${escapeHtml(params.get("client_id") || "")}</code><br>Scopes: <code>${escapeHtml(params.get("scope") || supportedOauthScopes().join(" "))}</code></p>${error ? `<p class="err">${escapeHtml(error)}</p>` : ""}<form method="post" action="/oauth/authorize">${hidden}<label>Owner approval code</label><input type="password" name="owner_code" autocomplete="current-password" required autofocus><button type="submit">Authorize MCP Client</button></form></main></body></html>`;
 }
 
 function html(body: string, status = 200): Response {
@@ -394,7 +395,7 @@ export async function handleAuthorize(req: NextRequest): Promise<Response> {
   }
   if (req.method === "GET") {
     const url = new URL(req.url);
-    const error = validateAuthorizeParams(url.searchParams, req);
+    const error = await validateAuthorizeParams(url.searchParams, req);
     return html(
       renderAuthorizePage(url.searchParams, req, error),
       error ? 400 : 200
@@ -404,7 +405,7 @@ export async function handleAuthorize(req: NextRequest): Promise<Response> {
     return oauthJson({ error: "method_not_allowed" }, 405);
   }
   const params = await readOAuthParams(req);
-  const error = validateAuthorizeParams(params, req);
+  const error = await validateAuthorizeParams(params, req);
   if (error) return html(renderAuthorizePage(params, req, error), 400);
   if (!safeEqual(params.get("owner_code") || "", ownerCode())) {
     return html(
@@ -699,14 +700,16 @@ export async function handleRegister(req: NextRequest): Promise<Response> {
     return oauthJson({ error: "invalid_redirect_uri" }, 400);
   }
   const clientId = `chatgpt-${randomBytes(12).toString("base64url")}`;
-  registeredClients.set(clientId, {
-    redirect_uris: redirectUris,
-    created_at: Date.now(),
+  const createdAt = new Date();
+  await registerOAuthDynamicClient({
+    clientId,
+    redirectUris,
+    createdAt: createdAt.toISOString(),
   });
   return NextResponse.json(
     {
       client_id: clientId,
-      client_id_issued_at: Math.floor(Date.now() / 1000),
+      client_id_issued_at: Math.floor(createdAt.getTime() / 1000),
       redirect_uris: redirectUris,
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],

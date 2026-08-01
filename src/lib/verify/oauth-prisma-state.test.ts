@@ -11,8 +11,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { resetOAuthDynamicClientsForTests } from "./oauth-clients";
 import { resetOAuthStateForTests } from "./oauth-state";
-import { handleAuthorize, handleRevoke, handleToken } from "./oauth-server";
+import {
+  handleAuthorize,
+  handleRegister,
+  handleRevoke,
+  handleToken,
+} from "./oauth-server";
 
 const ORIGIN = "https://verify.example.test";
 const RESOURCE = `${ORIGIN}/mcp`;
@@ -74,6 +80,9 @@ async function prismaDb(): Promise<{
   oAuthRefreshGrant: {
     count(): Promise<number>;
     findMany(): Promise<unknown[]>;
+  };
+  oAuthDynamicClient: {
+    count(): Promise<number>;
   };
   $disconnect(): Promise<void>;
 }> {
@@ -175,6 +184,7 @@ beforeEach(async () => {
   delete process.env.OAUTH_VERIFICATION_PUBLIC_KEYS;
   delete process.env.OAUTH_JWT_SECRET;
   await resetOAuthStateForTests();
+  await resetOAuthDynamicClientsForTests();
 });
 
 afterAll(async () => {
@@ -187,6 +197,32 @@ afterAll(async () => {
 });
 
 describe("OAuth Prisma state store", () => {
+  test("persists dynamic client registration across a fresh server module", async () => {
+    const registration = await handleRegister(
+      request("/oauth/register", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ redirect_uris: [REDIRECT] }),
+      })
+    );
+    expect(registration.status).toBe(201);
+    const registered = (await registration.json()) as { client_id: string };
+    expect(await (await prismaDb()).oAuthDynamicClient.count()).toBe(1);
+
+    const restartedServer = await import(
+      `./oauth-server.ts?prisma-restart-${crypto.randomUUID()}`
+    );
+    const params = authorizeParams();
+    params.set("client_id", registered.client_id);
+    const response = await restartedServer.handleAuthorize(
+      request(`/oauth/authorize?${params.toString()}`)
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).not.toContain(
+      "redirect_uri is not allowed for this client_id"
+    );
+  });
+
   test("persists authorization-code consumption and hashed refresh grants", async () => {
     const code = await issueAuthorizationCode();
     const first = await exchangeAuthorizationCode(code);
