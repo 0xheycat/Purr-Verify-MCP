@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ChildProcess } from "node:child_process";
 import {
   BrowserWorkSessionManager,
@@ -9,6 +12,7 @@ import {
 import {
   BROWSER_WORK_MCP_TOOLS,
   handleBrowserWorkMcpTool,
+  type BrowserWorkMcpToolResult,
 } from "./browser-work-mcp";
 import { recentVerifyDebugErrors } from "./debug";
 import { createProjectProcessEnvironment } from "./operator-runtime";
@@ -45,9 +49,12 @@ describe("Pursr browser work sessions", () => {
       "purr_work_session_snapshot",
       "purr_work_session_act",
       "purr_work_session_screenshot",
+      "purr_work_session_operation_status",
+      "purr_work_session_operation_cancel",
       "purr_work_session_artifacts",
       "purr_work_session_inspect",
       "purr_work_session_diagnostics",
+      "purr_work_session_force_close",
       "purr_work_session_close",
     ]);
     expect(BROWSER_WORK_MCP_TOOLS.find((tool) => tool.name === "purr_work_session_act")?.annotations.destructiveHint).toBe(true);
@@ -84,6 +91,17 @@ describe("Pursr browser work sessions", () => {
       type: "string",
       enum: ["auto", "allow", "disabled"],
     });
+    expect(screenshotSchema.properties?.mode).toMatchObject({
+      type: "string",
+      enum: ["auto", "sync", "async"],
+      default: "auto",
+    });
+    expect(screenshotSchema.properties?.delivery).toMatchObject({
+      type: "string",
+      enum: ["auto", "inline", "artifact"],
+      default: "auto",
+    });
+    expect(screenshotSchema.properties?.operationTimeoutMs?.type).toBe("number");
     expect(screenshotSchema.properties?.format?.description).toContain("PNG");
     expect(screenshotSchema.properties?.format?.description).toContain("GIF");
     expect(screenshotSchema.properties?.includeAttachments).toMatchObject({
@@ -109,6 +127,8 @@ describe("Pursr browser work sessions", () => {
     const inputSchema = actTool?.inputSchema as {
       properties?: {
         timeoutMs?: { type?: string; minimum?: number; description?: string };
+        operationTimeoutMs?: { type?: string; minimum?: number; description?: string };
+        mode?: { type?: string; enum?: string[]; default?: string };
         actions?: { items?: { oneOf?: Array<Record<string, unknown>> } };
       };
     };
@@ -128,6 +148,12 @@ describe("Pursr browser work sessions", () => {
 
     expect(inputSchema.properties?.timeoutMs).toMatchObject({ type: "number", minimum: 0 });
     expect(inputSchema.properties?.timeoutMs?.description).toContain("eval actions");
+    expect(inputSchema.properties?.operationTimeoutMs).toMatchObject({ type: "number", minimum: 0 });
+    expect(inputSchema.properties?.mode).toMatchObject({
+      type: "string",
+      enum: ["auto", "sync", "async"],
+      default: "auto",
+    });
     expect(selectorVariant?.properties?.timeoutMs).toMatchObject({ type: "number", minimum: 0 });
     expect(selectorVariant?.properties?.force?.type).toBe("boolean");
     expect(selectorVariant?.properties?.force?.description).toContain("Never enabled automatically");
@@ -250,6 +276,41 @@ describe("Pursr browser work sessions", () => {
     expect(restarted.status).toBe("ready");
     expect(restarted.pid).toBe(4343);
     await manager.close("dev-only");
+  });
+
+  test("autoPort allocates a free port and rewrites an existing dev-server port flag", async () => {
+    const child = new FakeChild();
+    let spawned: { program: string; args: string[] } | undefined;
+    let probedUrl = "";
+    const manager = new BrowserWorkSessionManager({
+      spawnProcess: ((program: string, args: string[]) => {
+        spawned = { program, args };
+        return child as unknown as ChildProcess;
+      }) as never,
+      fetchImpl: (async (input: string | URL | Request) => {
+        probedUrl = String(input);
+        return new Response("ok", { status: 200 });
+      }) as unknown as typeof fetch,
+      canonicalize: canonicalize as never,
+      sleep: async () => {},
+    });
+
+    const started = await manager.start({
+      cwd: "/tmp/example",
+      sessionId: "auto-port",
+      argv: ["bun", "run", "dev", "--", "-p", "3100"],
+      autoPort: true,
+      port: 0,
+      browserMode: "none",
+    });
+
+    expect(started.port).toBeGreaterThan(0);
+    expect(started.port).not.toBe(3100);
+    expect(spawned?.program).toBe("bun");
+    expect(spawned?.args.at(-2)).toBe("-p");
+    expect(spawned?.args.at(-1)).toBe(String(started.port));
+    expect(probedUrl).toContain(`:${started.port}/`);
+    await manager.close("auto-port");
   });
 
   test("keeps the dev server usable with a warning when Chrome is unavailable", async () => {
@@ -454,22 +515,196 @@ describe("Pursr browser work sessions", () => {
     });
   });
 
-  test("records structured Pursr action failures without turning them into transport failures", async () => {
+  test("auto mode returns operationId immediately for long browser actions", async () => {
     const state = globalThis as typeof globalThis & {
       __purrBrowserWorkManager?: {
+        status: (sessionId: string) => Record<string, unknown>;
         act: (
           sessionId: string,
           actions: Array<Record<string, unknown>>,
           options: Record<string, unknown>,
         ) => Promise<Record<string, unknown>>;
+        recoverBrowser: (sessionId: string, targetUrl?: string) => Promise<Record<string, unknown>>;
+        forceClose: (sessionId: string) => Promise<Record<string, unknown>>;
+      };
+      __purrBrowserWorkOperations?: unknown;
+    };
+    const previousManager = state.__purrBrowserWorkManager;
+    const previousOperations = state.__purrBrowserWorkOperations;
+    delete state.__purrBrowserWorkOperations;
+    state.__purrBrowserWorkManager = {
+      status: () => ({ browserUrl: "http://127.0.0.1:3100/game", viewport: { width: 1280, height: 800, dpr: 1 } }),
+      act: async (_sessionId, _actions, options) => ({
+        failed: false,
+        receivedOperationTimeoutMs: options.operationTimeoutMs,
+      }),
+      recoverBrowser: async () => ({ status: "ready" }),
+      forceClose: async () => ({ closed: true }),
+    };
+
+    try {
+      const started = await handleBrowserWorkMcpTool("purr_work_session_act", {
+        sessionId: "long-action",
+        timeoutMs: 60_000,
+        operationTimeoutMs: 180_000,
+        actions: [{ type: "eval", js: "window.game", timeoutMs: 60_000 }],
+      });
+      expect(started).toMatchObject({
+        handled: true,
+        payload: {
+          asynchronous: true,
+          operation: { sessionId: "long-action", kind: "act" },
+        },
+      });
+      const operationId = String((started.payload as { operation: { operationId: string } }).operation.operationId);
+
+      let terminal: BrowserWorkMcpToolResult | undefined;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        terminal = await handleBrowserWorkMcpTool("purr_work_session_operation_status", {
+          operationId,
+        });
+        const status = (terminal.payload as { status?: string }).status;
+        if (["success", "failed", "canceled"].includes(String(status))) break;
+        await Bun.sleep(5);
+      }
+      expect(terminal?.payload).toMatchObject({
+        operationId,
+        status: "success",
+        result: {
+          payload: { failed: false, receivedOperationTimeoutMs: 180_000 },
+        },
+      });
+    } finally {
+      if (previousManager) state.__purrBrowserWorkManager = previousManager;
+      else delete state.__purrBrowserWorkManager;
+      if (previousOperations) state.__purrBrowserWorkOperations = previousOperations;
+      else delete state.__purrBrowserWorkOperations;
+    }
+  });
+
+  test("high-resolution DPR2 screenshots auto-route to artifact-first async operations", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "verify-high-res-operation-"));
+    const rawOut = join(outputDir, "high-res.png");
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlS8AAAAASUVORK5CYII=",
+      "base64",
+    );
+    writeFileSync(rawOut, png);
+    let screenshotOptions: Record<string, unknown> | undefined;
+    const state = globalThis as typeof globalThis & {
+      __purrBrowserWorkManager?: {
+        status: (sessionId: string) => Record<string, unknown>;
+        screenshot: (sessionId: string, options: Record<string, unknown>) => Promise<{
+          metadata: Record<string, unknown>;
+          mimeType: string;
+        }>;
+        recoverBrowser: (sessionId: string, targetUrl?: string) => Promise<Record<string, unknown>>;
+        forceClose: (sessionId: string) => Promise<Record<string, unknown>>;
+      };
+      __purrBrowserWorkOperations?: unknown;
+    };
+    const previousManager = state.__purrBrowserWorkManager;
+    const previousOperations = state.__purrBrowserWorkOperations;
+    delete state.__purrBrowserWorkOperations;
+    state.__purrBrowserWorkManager = {
+      status: () => ({
+        outputDir,
+        browserUrl: "http://127.0.0.1:3100/game",
+        viewport: { width: 1920, height: 1200, dpr: 2 },
+      }),
+      screenshot: async (_sessionId, options) => {
+        screenshotOptions = options;
+        return {
+          metadata: {
+            sessionId: "high-res",
+            out: rawOut,
+            url: "http://127.0.0.1:3100/game",
+            image: { width: 3840, height: 2400, bytes: png.length, mimeType: "image/png" },
+          },
+          mimeType: "image/png",
+        };
+      },
+      recoverBrowser: async () => ({ status: "ready" }),
+      forceClose: async () => ({ closed: true }),
+    };
+
+    try {
+      const started = await handleBrowserWorkMcpTool("purr_work_session_screenshot", {
+        sessionId: "high-res",
+        timeoutMs: 300_000,
+        operationTimeoutMs: 360_000,
+        strategy: "playwright",
+        animations: "allow",
+        delivery: "auto",
+      });
+      expect(started.payload).toMatchObject({
+        asynchronous: true,
+        pixelCount: 9_216_000,
+        delivery: "artifact",
+        operation: { sessionId: "high-res", kind: "screenshot" },
+      });
+      const operationId = String((started.payload as { operation: { operationId: string } }).operation.operationId);
+
+      let terminal: BrowserWorkMcpToolResult | undefined;
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        terminal = await handleBrowserWorkMcpTool("purr_work_session_operation_status", { operationId });
+        if (["success", "failed", "canceled"].includes(String((terminal.payload as { status?: string }).status))) break;
+        await Bun.sleep(5);
+      }
+      expect(terminal?.payload).toMatchObject({
+        operationId,
+        status: "success",
+        result: {
+          payload: {
+            delivery: "artifact",
+            out: rawOut,
+            image: { width: 3840, height: 2400 },
+          },
+        },
+      });
+      expect(terminal?.content?.some((entry) => entry.type === "image")).toBe(false);
+      expect(screenshotOptions).toMatchObject({
+        timeoutMs: 300_000,
+        operationTimeoutMs: 360_000,
+        strategy: "playwright",
+        animations: "allow",
+        includeData: false,
+      });
+    } finally {
+      if (previousManager) state.__purrBrowserWorkManager = previousManager;
+      else delete state.__purrBrowserWorkManager;
+      if (previousOperations) state.__purrBrowserWorkOperations = previousOperations;
+      else delete state.__purrBrowserWorkOperations;
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  test("records structured action timeouts and recovers before returning control", async () => {
+    let recoveries = 0;
+    const state = globalThis as typeof globalThis & {
+      __purrBrowserWorkManager?: {
+        status: (sessionId: string) => Record<string, unknown>;
+        act: (
+          sessionId: string,
+          actions: Array<Record<string, unknown>>,
+          options: Record<string, unknown>,
+        ) => Promise<Record<string, unknown>>;
+        recoverBrowser: (sessionId: string, targetUrl?: string) => Promise<Record<string, unknown>>;
+        forceClose: (sessionId: string) => Promise<Record<string, unknown>>;
       };
     };
     const previousManager = state.__purrBrowserWorkManager;
     state.__purrBrowserWorkManager = {
+      status: () => ({ browserUrl: "http://127.0.0.1:3100/game" }),
       act: async (_sessionId, _actions, options) => ({
         failed: true,
         trace: [{ index: 0, type: "eval", ok: false, error: `eval action timed out after ${options.timeoutMs}ms` }],
       }),
+      recoverBrowser: async (_sessionId, targetUrl) => {
+        recoveries += 1;
+        return { status: "ready", browserUrl: targetUrl };
+      },
+      forceClose: async () => ({ closed: true }),
     };
 
     try {
@@ -487,6 +722,7 @@ describe("Pursr browser work sessions", () => {
         },
       });
       expect(result.isError).toBeUndefined();
+      expect(recoveries).toBe(1);
       expect(recentVerifyDebugErrors(1)[0]).toMatchObject({
         phase: "browser_work_tool",
         tool: "purr_work_session_act",
