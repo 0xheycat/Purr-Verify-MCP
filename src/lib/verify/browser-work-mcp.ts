@@ -10,6 +10,7 @@ import {
   type BrowserWorkResourceLink,
 } from "./browser-work-resource";
 import { transcodeBrowserScreenshot } from "./browser-work-media";
+import { BrowserWorkOperationRegistry } from "./browser-work-operation";
 import { recordVerifyDebugError } from "./debug";
 import { classifyDestructiveCommand } from "./operator-runtime";
 
@@ -51,6 +52,26 @@ const SESSION_ID = {
   type: "string",
   description: "Work-session identifier returned by purr_work_session_start.",
 };
+
+const OPERATION_ID = {
+  type: "string",
+  description: "Browser-operation identifier returned by an asynchronous act or screenshot call.",
+};
+
+const AUTO_ASYNC_TRANSPORT_BUDGET_MS = 40_000;
+const DEFAULT_ASYNC_OPERATION_TIMEOUT_MS = 10 * 60_000;
+
+interface BrowserWorkMcpGlobalState {
+  __purrBrowserWorkOperations?: BrowserWorkOperationRegistry;
+}
+
+function browserWorkOperationRegistry(): BrowserWorkOperationRegistry {
+  const state = globalThis as typeof globalThis & BrowserWorkMcpGlobalState;
+  if (!state.__purrBrowserWorkOperations) {
+    state.__purrBrowserWorkOperations = new BrowserWorkOperationRegistry();
+  }
+  return state.__purrBrowserWorkOperations;
+}
 
 const NON_EVAL_ACTION_TYPES = [
   "click",
@@ -193,7 +214,8 @@ export const BROWSER_WORK_MCP_TOOLS: BrowserWorkMcpToolDefinition[] = [
           description: "Expected local HTTP URL. When omitted, host and port are used and local URLs printed by the dev server are auto-detected.",
         },
         host: { type: "string", default: "127.0.0.1" },
-        port: { type: "number", default: 3000 },
+        port: { type: "number", default: 3000, description: "Expected dev-server port. Use 0 or autoPort=true to allocate a free port and rewrite an existing -p/--port argument." },
+        autoPort: { type: "boolean", default: false, description: "Allocate a free port automatically and pass it through PORT plus any existing -p/--port command argument." },
         readyPath: { type: "string", default: "/" },
         startupTimeoutMs: { type: "number", default: 120000 },
         browserMode: {
@@ -270,6 +292,17 @@ export const BROWSER_WORK_MCP_TOOLS: BrowserWorkMcpToolDefinition[] = [
           minimum: 0,
           description: "Default per-action deadline for actions that omit timeoutMs, including eval actions.",
         },
+        operationTimeoutMs: {
+          type: "number",
+          minimum: 0,
+          description: "Total deadline for the whole ordered action batch. Large budgets are automatically routed to an asynchronous browser operation.",
+        },
+        mode: {
+          type: "string",
+          enum: ["auto", "sync", "async"],
+          default: "auto",
+          description: "Auto returns an operationId for work likely to exceed the MCP transport window. Sync is for deliberately short actions only.",
+        },
         actions: { type: "array", minItems: 1, items: BROWSER_ACTION_SCHEMA },
       },
       required: ["sessionId", "actions"],
@@ -303,6 +336,23 @@ export const BROWSER_WORK_MCP_TOOLS: BrowserWorkMcpToolDefinition[] = [
           minimum: 0,
           description: "Total capture-operation deadline forwarded to Pursr.",
         },
+        operationTimeoutMs: {
+          type: "number",
+          minimum: 0,
+          description: "Outer session-operation deadline. Large budgets are safe because auto mode runs them asynchronously.",
+        },
+        mode: {
+          type: "string",
+          enum: ["auto", "sync", "async"],
+          default: "auto",
+          description: "Auto routes high-resolution or long-deadline capture to an asynchronous operation and returns operationId immediately.",
+        },
+        delivery: {
+          type: "string",
+          enum: ["auto", "inline", "artifact"],
+          default: "auto",
+          description: "Auto keeps small images inline and makes high-resolution captures artifact-first to avoid base64 transport stalls.",
+        },
         strategy: {
           type: "string",
           enum: ["auto", "playwright", "cdp", "stitched"],
@@ -322,6 +372,31 @@ export const BROWSER_WORK_MCP_TOOLS: BrowserWorkMcpToolDefinition[] = [
       required: ["sessionId"],
     },
     annotations: READ_ONLY,
+  },
+  {
+    name: "purr_work_session_operation_status",
+    description:
+      "Read an asynchronous browser operation without blocking the session. Terminal screenshot results expose artifact metadata; the full-resolution file remains available through browser resources.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operationId: OPERATION_ID,
+        includeResult: { type: "boolean", default: true },
+      },
+      required: ["operationId"],
+    },
+    annotations: READ_ONLY,
+  },
+  {
+    name: "purr_work_session_operation_cancel",
+    description:
+      "Cancel an asynchronous browser operation and recover the browser out of band so the session queue cannot remain poisoned.",
+    inputSchema: {
+      type: "object",
+      properties: { operationId: OPERATION_ID },
+      required: ["operationId"],
+    },
+    annotations: SIDE_EFFECTING,
   },
   {
     name: "purr_work_session_artifacts",
@@ -362,6 +437,17 @@ export const BROWSER_WORK_MCP_TOOLS: BrowserWorkMcpToolDefinition[] = [
       required: ["sessionId"],
     },
     annotations: READ_ONLY,
+  },
+  {
+    name: "purr_work_session_force_close",
+    description:
+      "Emergency close path that bypasses any stuck browser-operation queue, terminates the browser/dev-server process tree, and returns bounded cleanup evidence.",
+    inputSchema: {
+      type: "object",
+      properties: { sessionId: SESSION_ID },
+      required: ["sessionId"],
+    },
+    annotations: SIDE_EFFECTING,
   },
   {
     name: "purr_work_session_close",
@@ -451,13 +537,98 @@ function browserWorkFailure(
   return error(message, extra);
 }
 
-function actionFailureMessage(payload: Record<string, unknown>): string | undefined {
+interface BrowserActionFailure {
+  type?: string;
+  message: string;
+}
+
+function actionFailure(payload: Record<string, unknown>): BrowserActionFailure | undefined {
   if (payload.failed !== true || !Array.isArray(payload.trace)) return undefined;
   const failedStep = payload.trace.find(
     (entry): entry is Record<string, unknown> =>
       Boolean(entry) && typeof entry === "object" && !Array.isArray(entry) && entry.ok === false,
   );
-  return stringValue(failedStep?.error) ?? "browser action sequence failed";
+  return {
+    type: stringValue(failedStep?.type),
+    message: stringValue(failedStep?.error) ?? "browser action sequence failed",
+  };
+}
+
+function actionFailureMessage(payload: Record<string, unknown>): string | undefined {
+  return actionFailure(payload)?.message;
+}
+
+function actionFailureNeedsRecovery(failure: BrowserActionFailure): boolean {
+  return new Set(["eval", "navigate", "reload"]).has(failure.type ?? "")
+    && /timed out|timeout|target closed|execution context|page crashed|browser.*closed/i.test(failure.message);
+}
+
+function numericValue(value: unknown): number | undefined {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : undefined;
+}
+
+function executionMode(value: unknown): "auto" | "sync" | "async" {
+  return value === "sync" || value === "async" ? value : "auto";
+}
+
+function estimatedActionBudgetMs(
+  actions: Array<Record<string, unknown>>,
+  defaultTimeoutMs: number | undefined,
+): number {
+  return actions.reduce((total, action) => {
+    const operation = stringValue(action.type) ?? stringValue(action.op);
+    const actionTimeout = numericValue(action.timeoutMs)
+      ?? defaultTimeoutMs
+      ?? (operation === "sleep" ? numericValue(action.ms) ?? 0 : 15_000);
+    return total + actionTimeout + (numericValue(action.settleMs) ?? 0);
+  }, 0);
+}
+
+function viewportPixelCount(status: Record<string, unknown>): number {
+  const viewport = status.viewport && typeof status.viewport === "object" && !Array.isArray(status.viewport)
+    ? status.viewport as Record<string, unknown>
+    : {};
+  const width = numericValue(viewport.width) ?? 0;
+  const height = numericValue(viewport.height) ?? 0;
+  const dpr = numericValue(viewport.deviceScaleFactor) ?? numericValue(viewport.dpr) ?? 1;
+  return width * height * dpr * dpr;
+}
+
+function shouldRunActAsync(
+  args: Record<string, unknown>,
+  actions: Array<Record<string, unknown>>,
+): boolean {
+  const mode = executionMode(args.mode);
+  if (mode === "async") return true;
+  if (mode === "sync") return false;
+  const defaultTimeout = numericValue(args.timeoutMs);
+  const operationTimeout = numericValue(args.operationTimeoutMs);
+  return (operationTimeout ?? 0) > AUTO_ASYNC_TRANSPORT_BUDGET_MS
+    || (defaultTimeout ?? 0) > AUTO_ASYNC_TRANSPORT_BUDGET_MS
+    || estimatedActionBudgetMs(actions, defaultTimeout) > AUTO_ASYNC_TRANSPORT_BUDGET_MS;
+}
+
+function shouldRunScreenshotAsync(
+  args: Record<string, unknown>,
+  status: Record<string, unknown>,
+): boolean {
+  const mode = executionMode(args.mode);
+  if (mode === "async") return true;
+  if (mode === "sync") return false;
+  return (numericValue(args.operationTimeoutMs) ?? 0) > AUTO_ASYNC_TRANSPORT_BUDGET_MS
+    || (numericValue(args.timeoutMs) ?? 0) > AUTO_ASYNC_TRANSPORT_BUDGET_MS
+    || viewportPixelCount(status) >= 3_000_000;
+}
+
+function actionRecoveryUrl(
+  actions: Array<Record<string, unknown>>,
+  currentUrl: unknown,
+): string | undefined {
+  const navigate = [...actions].reverse().find(
+    (action) => (stringValue(action.type) ?? stringValue(action.op)) === "navigate" && stringValue(action.url),
+  );
+  return stringValue(navigate?.url) ?? stringValue(currentUrl);
 }
 
 function validateActions(
@@ -475,6 +646,71 @@ function validateActions(
   return undefined;
 }
 
+async function recoverTimedOutSession(
+  manager: ReturnType<typeof getBrowserWorkSessionManager>,
+  sessionId: string,
+  targetUrl?: string,
+): Promise<void> {
+  try {
+    await manager.recoverBrowser(sessionId, targetUrl);
+  } catch {
+    await manager.forceClose(sessionId).catch(() => {});
+  }
+}
+
+async function performScreenshot(
+  manager: ReturnType<typeof getBrowserWorkSessionManager>,
+  sessionId: string,
+  args: Record<string, unknown>,
+  includeData: boolean,
+): Promise<{ payload: Record<string, unknown>; content: Array<Record<string, unknown>> }> {
+  const status = manager.status(sessionId);
+  const outputDir = stringValue(status.outputDir);
+  if (!outputDir) throw new Error("browser work session has no artifact directory");
+  const operationTimeoutMs = numericValue(args.operationTimeoutMs);
+  const raw = await manager.screenshot(sessionId, {
+    full: args.full === true,
+    selector: stringValue(args.selector),
+    timeoutMs: numericValue(args.timeoutMs),
+    ...(operationTimeoutMs !== undefined ? { operationTimeoutMs } : {}),
+    strategy: stringValue(args.strategy),
+    animations: stringValue(args.animations),
+    includeData,
+  });
+  const result = await transcodeBrowserScreenshot(raw, {
+    format: stringValue(args.format),
+    quality: numericValue(args.quality),
+    out: stringValue(args.out),
+    outputDir,
+    includeData,
+  });
+  const resourceLink = browserWorkArtifactResourceLink(
+    result.metadata,
+    result.data,
+    result.mimeType,
+  );
+  const payload = {
+    ...result.metadata,
+    delivery: includeData ? "inline" : "artifact",
+    ...(resourceLink ? { artifact: artifactMetadata(resourceLink) } : {}),
+  };
+  return {
+    payload,
+    content: [
+      { type: "text", text: JSON.stringify(payload, null, 2) },
+      ...(result.data
+        ? [{
+            type: "image",
+            data: result.data,
+            mimeType: result.mimeType,
+            annotations: { audience: ["assistant", "user"], priority: 1 },
+          }]
+        : []),
+      ...(args.includeAttachments === true && resourceLink ? [resourceLink] : []),
+    ],
+  };
+}
+
 export async function handleBrowserWorkMcpTool(
   name: string | undefined,
   args: Record<string, unknown>,
@@ -486,8 +722,28 @@ export async function handleBrowserWorkMcpTool(
     browserWorkFailure(name, sessionId, message, extra);
   try {
     const manager = getBrowserWorkSessionManager();
+    const operations = browserWorkOperationRegistry();
     if (name === "purr_browser_doctor") return { handled: true, payload: await browserDoctor() };
     if (name === "purr_work_sessions") return { handled: true, payload: { sessions: manager.list() } };
+    if (name === "purr_work_session_operation_status") {
+      const operationId = stringValue(args.operationId);
+      if (!operationId) return fail("operationId is required");
+      const operation = operations.status(operationId, args.includeResult !== false);
+      const media = operation.result?.content?.filter((entry) => entry.type !== "text") ?? [];
+      return {
+        handled: true,
+        payload: operation,
+        content: [
+          { type: "text", text: JSON.stringify(operation, null, 2) },
+          ...media,
+        ],
+      };
+    }
+    if (name === "purr_work_session_operation_cancel") {
+      const operationId = stringValue(args.operationId);
+      if (!operationId) return fail("operationId is required");
+      return { handled: true, payload: operations.cancel(operationId) };
+    }
 
     if (name !== "purr_work_session_start" && !sessionId) return fail("sessionId is required");
 
@@ -517,6 +773,7 @@ export async function handleBrowserWorkMcpTool(
         url: stringValue(args.url),
         host: stringValue(args.host),
         port: typeof args.port === "number" ? args.port : undefined,
+        autoPort: args.autoPort === true || args.port === 0,
         readyPath: stringValue(args.readyPath),
         startupTimeoutMs: typeof args.startupTimeoutMs === "number" ? args.startupTimeoutMs : undefined,
         browserMode: stringValue(args.browserMode) as BrowserWorkMode | undefined,
@@ -540,7 +797,10 @@ export async function handleBrowserWorkMcpTool(
             "purr_work_session_snapshot",
             "purr_work_session_act",
             "purr_work_session_screenshot",
+            "purr_work_session_operation_status",
+            "purr_work_session_operation_cancel",
             "purr_work_session_diagnostics",
+            "purr_work_session_force_close",
             "purr_work_session_close",
           ],
         },
@@ -565,53 +825,102 @@ export async function handleBrowserWorkMcpTool(
       if (!actions?.length) return fail("actions must be an array of objects");
       const validationError = validateActions(actions);
       if (validationError) return fail(validationError.message, validationError.extra);
+      const defaultTimeoutMs = numericValue(args.timeoutMs);
+      const estimatedBudget = estimatedActionBudgetMs(actions, defaultTimeoutMs);
+      const operationTimeoutMs = numericValue(args.operationTimeoutMs)
+        ?? Math.max(DEFAULT_ASYNC_OPERATION_TIMEOUT_MS, estimatedBudget + 60_000);
+      if (shouldRunActAsync(args, actions)) {
+        const current = manager.status(sessionId!);
+        const recoveryUrl = actionRecoveryUrl(actions, current.browserUrl);
+        const operation = operations.start({
+          sessionId: sessionId!,
+          kind: "act",
+          timeoutMs: operationTimeoutMs,
+          run: async () => {
+            const payload = await manager.act(sessionId!, actions, {
+              timeoutMs: defaultTimeoutMs,
+              operationTimeoutMs,
+            });
+            const failure = actionFailure(payload);
+            if (failure) {
+              recordBrowserWorkFailure(name, sessionId, failure.message);
+              if (actionFailureNeedsRecovery(failure)) {
+                await recoverTimedOutSession(manager, sessionId!, recoveryUrl);
+              }
+            }
+            return { payload };
+          },
+          onCancel: () => recoverTimedOutSession(manager, sessionId!, recoveryUrl),
+        });
+        return {
+          handled: true,
+          payload: {
+            asynchronous: true,
+            operation,
+            estimatedActionBudgetMs: estimatedBudget,
+            nextTools: [
+              "purr_work_session_operation_status",
+              "purr_work_session_operation_cancel",
+              "purr_work_session_status",
+            ],
+          },
+        };
+      }
       const payload = await manager.act(sessionId!, actions, {
-        timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : undefined,
+        timeoutMs: defaultTimeoutMs,
+        operationTimeoutMs: numericValue(args.operationTimeoutMs),
       });
-      const actionError = actionFailureMessage(payload);
-      if (actionError) recordBrowserWorkFailure(name, sessionId, actionError);
+      const failure = actionFailure(payload);
+      if (failure) {
+        recordBrowserWorkFailure(name, sessionId, failure.message);
+        if (actionFailureNeedsRecovery(failure)) {
+          const current = manager.status(sessionId!);
+          await recoverTimedOutSession(
+            manager,
+            sessionId!,
+            actionRecoveryUrl(actions, current.browserUrl),
+          );
+        }
+      }
       return { handled: true, payload };
     }
     if (name === "purr_work_session_screenshot") {
       const status = manager.status(sessionId!);
-      const outputDir = stringValue(status.outputDir);
-      if (!outputDir) return fail("browser work session has no artifact directory");
-      const raw = await manager.screenshot(sessionId!, {
-        full: args.full === true,
-        selector: stringValue(args.selector),
-        timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : undefined,
-        strategy: stringValue(args.strategy),
-        animations: stringValue(args.animations),
-      });
-      const result = await transcodeBrowserScreenshot(raw, {
-        format: stringValue(args.format),
-        quality: typeof args.quality === "number" ? args.quality : undefined,
-        out: stringValue(args.out),
-        outputDir,
-      });
-      const resourceLink = browserWorkArtifactResourceLink(
-        result.metadata,
-        result.data,
-        result.mimeType,
-      );
-      const payload = {
-        ...result.metadata,
-        ...(resourceLink ? { artifact: artifactMetadata(resourceLink) } : {}),
-      };
-      return {
-        handled: true,
-        payload,
-        content: [
-          { type: "text", text: JSON.stringify(payload, null, 2) },
-          {
-            type: "image",
-            data: result.data,
-            mimeType: result.mimeType,
-            annotations: { audience: ["assistant", "user"], priority: 1 },
+      const pixelCount = viewportPixelCount(status as unknown as Record<string, unknown>);
+      const delivery = stringValue(args.delivery) ?? "auto";
+      const operationTimeoutMs = numericValue(args.operationTimeoutMs)
+        ?? Math.max(DEFAULT_ASYNC_OPERATION_TIMEOUT_MS, (numericValue(args.timeoutMs) ?? 0) + 60_000);
+      if (shouldRunScreenshotAsync(args, status as unknown as Record<string, unknown>)) {
+        const operation = operations.start({
+          sessionId: sessionId!,
+          kind: "screenshot",
+          timeoutMs: operationTimeoutMs,
+          run: async () => await performScreenshot(manager, sessionId!, {
+            ...args,
+            operationTimeoutMs,
+            includeAttachments: false,
+          }, delivery === "inline"),
+          onCancel: () => recoverTimedOutSession(manager, sessionId!, stringValue(status.browserUrl)),
+        });
+        return {
+          handled: true,
+          payload: {
+            asynchronous: true,
+            operation,
+            pixelCount,
+            delivery: delivery === "inline" ? "inline" : "artifact",
+            nextTools: [
+              "purr_work_session_operation_status",
+              "purr_work_session_operation_cancel",
+              "purr_work_session_artifacts",
+              "purr_work_session_status",
+            ],
           },
-          ...(args.includeAttachments === true && resourceLink ? [resourceLink] : []),
-        ],
-      };
+        };
+      }
+      const includeData = delivery === "inline" || (delivery === "auto" && pixelCount < 3_000_000);
+      const output = await performScreenshot(manager, sessionId!, args, includeData);
+      return { handled: true, payload: output.payload, content: output.content };
     }
     if (name === "purr_work_session_artifacts") {
       const status = manager.status(sessionId!);
@@ -650,6 +959,9 @@ export async function handleBrowserWorkMcpTool(
     }
     if (name === "purr_work_session_diagnostics") {
       return { handled: true, payload: manager.diagnostics(sessionId!, args.clear === true) };
+    }
+    if (name === "purr_work_session_force_close") {
+      return { handled: true, payload: await manager.forceClose(sessionId!) };
     }
     if (name === "purr_work_session_close") {
       const status = manager.status(sessionId!);
