@@ -5,7 +5,7 @@ import { browserWorkArtifactMimeType } from "./browser-work-resource";
 
 interface BrowserScreenshotResult {
   metadata: Record<string, unknown>;
-  data: string;
+  data?: string;
   mimeType: string;
 }
 
@@ -14,6 +14,7 @@ interface BrowserScreenshotOutputOptions {
   quality?: number;
   out?: string;
   outputDir: string;
+  includeData?: boolean;
 }
 
 const FORMAT_ALIASES: Record<string, string> = {
@@ -71,7 +72,9 @@ export async function transcodeBrowserScreenshot(
   const requestedOut = String(options.out ?? "").trim() || undefined;
   const format = cleanFormat(options.format, requestedOut);
   const quality = boundedQuality(options.quality);
-  const source = Buffer.from(result.data, "base64");
+  const source = result.data
+    ? Buffer.from(result.data, "base64")
+    : await fs.readFile(rawOut);
   const managedOut = managedOutputPath(rawOut, options.outputDir, format, requestedOut);
   const encoded = format === "png" && result.mimeType === "image/png"
     ? source
@@ -94,7 +97,7 @@ export async function transcodeBrowserScreenshot(
       format,
       quality,
     },
-    data: encoded.toString("base64"),
+    ...(options.includeData !== false ? { data: encoded.toString("base64") } : {}),
     mimeType,
   };
 }

@@ -83,6 +83,7 @@ describe("browser work media MCP delivery", () => {
       timeoutMs: 321,
       strategy: "cdp",
       animations: "allow",
+      includeData: true,
     });
     expect(result.payload).toMatchObject({
       captureMode: "cdp-viewport-fallback",
