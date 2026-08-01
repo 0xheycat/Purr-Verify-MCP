@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { createServer } from "node:net";
 import { chromium } from "playwright-core";
 import { MAX_LONG_RUN_TIMEOUT_MS, getConfig } from "./config";
 import { canonicalDirectory } from "./operator-inspection";
@@ -22,6 +23,7 @@ export interface BrowserWorkStartInput {
   url?: string;
   host?: string;
   port?: number;
+  autoPort?: boolean;
   readyPath?: string;
   startupTimeoutMs?: number;
   browserMode?: BrowserWorkMode;
@@ -44,10 +46,13 @@ export interface BrowserWorkSummary {
   command: string;
   pid: number | null;
   url: string | null;
+  browserUrl: string | null;
   browserMode: BrowserWorkMode;
   browserAttached: boolean;
   browserSessionId: string | null;
   outputDir: string;
+  port: number | null;
+  viewport: Record<string, unknown> | null;
   startedAt: string;
   updatedAt: string;
   exitCode: number | null;
@@ -74,7 +79,7 @@ interface PursrScreenshotResult {
   sessionId: string;
   out: string;
   url: string | null;
-  data: string;
+  data?: string;
   mimeType: string;
   captureMode: string;
   fallbackUsed: boolean;
@@ -120,6 +125,7 @@ interface BrowserWorkRecord extends BrowserWorkSummary {
   browserResult: Record<string, unknown> | null;
   browserManager: PursrBrowserSessionManager | null;
   environmentSecrets: string[];
+  browserOpenInput: Record<string, unknown> | null;
 }
 
 export interface BrowserWorkDependencies {
@@ -190,16 +196,51 @@ function validateEnvironment(value: unknown): Record<string, string> {
   return output;
 }
 
-function commandSpec(input: BrowserWorkStartInput): {
+function rewriteCommandPort(argv: string[], port: number): string[] {
+  const output = [...argv];
+  for (let index = 0; index < output.length; index += 1) {
+    const value = output[index];
+    if (value === "-p" || value === "--port") {
+      if (index + 1 < output.length) output[index + 1] = String(port);
+      else output.push(String(port));
+      return output;
+    }
+    if (value.startsWith("--port=")) {
+      output[index] = `--port=${port}`;
+      return output;
+    }
+  }
+  return output;
+}
+
+async function findAvailablePort(host: string): Promise<number> {
+  return await new Promise<number>((resolve, reject) => {
+    const server = createServer();
+    server.unref();
+    server.once("error", reject);
+    server.listen({ host, port: 0, exclusive: true }, () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close((error) => {
+        if (error) reject(error);
+        else if (!port) reject(new Error("failed to allocate an automatic dev-server port"));
+        else resolve(port);
+      });
+    });
+  });
+}
+
+function commandSpec(input: BrowserWorkStartInput, resolvedPort?: number): {
   program: string;
   args: string[];
   display: string;
 } {
   if (input.argv?.length) {
+    const argv = resolvedPort ? rewriteCommandPort(input.argv, resolvedPort) : input.argv;
     return {
-      program: input.argv[0],
-      args: input.argv.slice(1),
-      display: input.argv.join(" "),
+      program: argv[0],
+      args: argv.slice(1),
+      display: argv.join(" "),
     };
   }
   const command = input.command?.trim();
@@ -209,7 +250,7 @@ function commandSpec(input: BrowserWorkStartInput): {
   throw new Error("provide argv, or provide command with shell=true");
 }
 
-function normalizedLoopbackUrl(input: BrowserWorkStartInput): string {
+function normalizedLoopbackUrl(input: BrowserWorkStartInput, resolvedPort?: number): string {
   if (input.url) {
     const parsed = new URL(input.url);
     if (!new Set(["http:", "https:"]).has(parsed.protocol)) throw new Error("url must use http or https");
@@ -217,7 +258,7 @@ function normalizedLoopbackUrl(input: BrowserWorkStartInput): string {
   }
   const host = String(input.host ?? "127.0.0.1").trim();
   if (!host || /[\s/]/.test(host)) throw new Error("host is invalid");
-  return `http://${host}:${safePort(input.port)}/`;
+  return `http://${host}:${resolvedPort ?? safePort(input.port)}/`;
 }
 
 function withReadyPath(base: string, readyPath: string): string {
@@ -382,8 +423,17 @@ export class BrowserWorkSessionManager {
       this.records.delete(id);
     }
     const cwd = (await this.canonicalize(input.cwd)).canonicalPath;
-    const command = commandSpec(input);
-    const environmentOverrides = validateEnvironment(input.environmentOverrides);
+    const host = String(input.host ?? "127.0.0.1").trim();
+    const resolvedPort = input.url
+      ? null
+      : (input.autoPort === true || input.port === 0
+        ? await findAvailablePort(host)
+        : safePort(input.port));
+    const command = commandSpec(input, resolvedPort ?? undefined);
+    const environmentOverrides = {
+      ...validateEnvironment(input.environmentOverrides),
+      ...(resolvedPort ? { PORT: String(resolvedPort) } : {}),
+    };
     const environmentSecrets = Object.values(environmentOverrides).filter((value) => value.length >= 6);
     const cfg = getConfig();
     const outputDir = path.join(cfg.dataDir, "browser-work", id);
@@ -392,7 +442,7 @@ export class BrowserWorkSessionManager {
     if (!new Set<BrowserWorkMode>(["headless", "visible", "cdp", "none"]).has(mode)) {
       throw new Error("browserMode must be headless, visible, cdp, or none");
     }
-    const baseUrl = normalizedLoopbackUrl(input);
+    const baseUrl = normalizedLoopbackUrl(input, resolvedPort ?? undefined);
     const readyPath = normalizeReadyPath(input.readyPath);
     const startedAt = this.now().toISOString();
     const child = this.spawnProcess(command.program, command.args, {
@@ -409,10 +459,13 @@ export class BrowserWorkSessionManager {
       command: command.display,
       pid: child.pid ?? null,
       url: null,
+      browserUrl: null,
       browserMode: mode,
       browserAttached: false,
       browserSessionId: null,
       outputDir,
+      port: resolvedPort ?? (input.url ? Number(new URL(input.url).port || (new URL(input.url).protocol === "https:" ? 443 : 80)) : null),
+      viewport: null,
       startedAt,
       updatedAt: startedAt,
       exitCode: null,
@@ -424,6 +477,7 @@ export class BrowserWorkSessionManager {
       browserResult: null,
       browserManager: null,
       environmentSecrets,
+      browserOpenInput: null,
     };
     this.records.set(id, record);
     const append = (stream: "stdout" | "stderr", chunk: Buffer | string) => {
@@ -496,7 +550,7 @@ export class BrowserWorkSessionManager {
           throw new Error("Chrome-compatible browser not found; install one or set PURSR_BROWSER_PATH");
         }
         const browserSessionId = `${id}-browser`;
-        const browserResult = await runtime.manager.open({
+        const browserOpenInput = {
           sessionId: browserSessionId,
           url: readyUrl,
           flags: {
@@ -511,11 +565,21 @@ export class BrowserWorkSessionManager {
             recordVideoDir: input.recordVideo ? path.join(outputDir, "video") : undefined,
           },
           storageState: input.storageState,
-        });
+        };
+        const browserResult = await runtime.manager.open(browserOpenInput);
         record.browserManager = runtime.manager;
         record.browserSessionId = browserSessionId;
         record.browserAttached = true;
         record.browserResult = browserResult;
+        record.browserUrl = typeof browserResult.url === "string" ? browserResult.url : readyUrl;
+        record.browserOpenInput = browserOpenInput;
+        record.viewport = browserResult.viewport && typeof browserResult.viewport === "object"
+          ? (browserResult.viewport as Record<string, unknown>)
+          : {
+              width: input.width ?? null,
+              height: input.height ?? null,
+              dpr: input.dpr ?? 1,
+            };
         record.status = "ready";
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -551,6 +615,10 @@ export class BrowserWorkSessionManager {
       actions,
       options,
     );
+    if (typeof result.url === "string") {
+      record.browserUrl = result.url;
+      if (record.browserOpenInput) record.browserOpenInput = { ...record.browserOpenInput, url: result.url };
+    }
     record.updatedAt = this.now().toISOString();
     return result;
   }
@@ -558,9 +626,10 @@ export class BrowserWorkSessionManager {
   async screenshot(
     sessionId: string,
     options: Record<string, unknown> = {},
-  ): Promise<{ metadata: Record<string, unknown>; data: string; mimeType: string }> {
+  ): Promise<{ metadata: Record<string, unknown>; data?: string; mimeType: string }> {
     const record = this.requireBrowser(sessionId);
     const result = await record.browserManager!.screenshot(record.browserSessionId!, options);
+    if (typeof result.url === "string") record.browserUrl = result.url;
     record.updatedAt = this.now().toISOString();
     const { data, mimeType, sessionId: pursrSessionId, ...captureMetadata } = result;
     return {
@@ -571,7 +640,7 @@ export class BrowserWorkSessionManager {
         pursrSessionId,
         captureMimeType: mimeType,
       },
-      data,
+      ...(data ? { data } : {}),
       mimeType,
     };
   }
@@ -580,6 +649,37 @@ export class BrowserWorkSessionManager {
     if (!selector?.trim()) throw new Error("selector is required");
     const record = this.requireBrowser(sessionId);
     return record.browserManager!.inspect(record.browserSessionId!, selector);
+  }
+
+  async recoverBrowser(sessionId: string, targetUrl?: string): Promise<BrowserWorkSummary> {
+    const record = this.requireBrowser(sessionId);
+    if (!record.browserOpenInput) throw new Error("browser recovery metadata is unavailable");
+    record.status = "starting";
+    record.warning = "recovering browser after a timed-out operation";
+    record.updatedAt = this.now().toISOString();
+    const manager = record.browserManager!;
+    const browserSessionId = record.browserSessionId!;
+    await Promise.race([
+      manager.close(browserSessionId),
+      this.sleep(5_000),
+    ]).catch(() => {});
+    const openInput = {
+      ...record.browserOpenInput,
+      url: targetUrl || record.browserUrl || record.url || String(record.browserOpenInput.url ?? ""),
+    };
+    const browserResult = await manager.open(openInput);
+    record.browserResult = browserResult;
+    record.browserUrl = typeof browserResult.url === "string" ? browserResult.url : String(openInput.url ?? "");
+    record.browserOpenInput = openInput;
+    record.browserAttached = true;
+    record.status = "ready";
+    record.warning = null;
+    record.error = null;
+    record.viewport = browserResult.viewport && typeof browserResult.viewport === "object"
+      ? (browserResult.viewport as Record<string, unknown>)
+      : record.viewport;
+    record.updatedAt = this.now().toISOString();
+    return this.summary(record);
   }
 
   diagnostics(sessionId: string, clear = false): Record<string, unknown> {
@@ -603,28 +703,41 @@ export class BrowserWorkSessionManager {
   }
 
   async close(sessionId: string): Promise<Record<string, unknown>> {
+    return await this.forceClose(sessionId);
+  }
+
+  async forceClose(sessionId: string): Promise<Record<string, unknown>> {
     const record = this.get(sessionId);
     const processAlive = record.child.exitCode === null && record.child.signalCode === null;
     if (record.status === "stopped" && !record.browserAttached && !processAlive) {
-      return { ...this.summary(record), closed: false };
+      return { ...this.summary(record), closed: false, forced: true };
     }
     record.status = "stopping";
     record.updatedAt = this.now().toISOString();
     let browser: Record<string, unknown> | null = null;
-    if (record.browserAttached && record.browserManager && record.browserSessionId) {
+    const warnings: string[] = [];
+    const manager = record.browserManager;
+    const browserSessionId = record.browserSessionId;
+    record.browserAttached = false;
+    record.browserManager = null;
+    record.browserSessionId = null;
+    if (manager && browserSessionId) {
       try {
-        browser = await record.browserManager.close(record.browserSessionId);
+        browser = await Promise.race([
+          manager.close(browserSessionId),
+          this.sleep(5_000).then(() => {
+            throw new Error("browser force-close timed out after 5000ms");
+          }),
+        ]);
       } catch (error) {
-        record.warning = `browser close warning: ${error instanceof Error ? error.message : String(error)}`;
+        warnings.push(error instanceof Error ? error.message : String(error));
       }
     }
     await this.stopProcess(record);
     record.status = "stopped";
-    record.browserAttached = false;
-    record.browserManager = null;
-    record.browserSessionId = null;
+    record.warning = warnings.length ? warnings.join("; ") : null;
     record.updatedAt = this.now().toISOString();
-    return { ...this.summary(record), closed: true, browser };
+    return { ...this.summary(record), closed: true, forced: true, browser, warnings };
   }
 
   closeAllSync(): void {
@@ -653,10 +766,13 @@ export class BrowserWorkSessionManager {
       command: record.command,
       pid: record.pid,
       url: record.url,
+      browserUrl: record.browserUrl,
       browserMode: record.browserMode,
       browserAttached: record.browserAttached,
       browserSessionId: record.browserSessionId,
       outputDir: record.outputDir,
+      port: record.port,
+      viewport: record.viewport,
       startedAt: record.startedAt,
       updatedAt: record.updatedAt,
       exitCode: record.exitCode,
